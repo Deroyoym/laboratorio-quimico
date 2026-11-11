@@ -3,6 +3,8 @@ import {
   createVessel,
   emptyVessel,
   step,
+  vesselFromData,
+  vesselToData,
   type LabEvent,
   type Vessel,
 } from '../chem/engine';
@@ -10,6 +12,7 @@ import { REAGENTS, type ReagentDef } from '../chem/reagents';
 import { SPECIES } from '../chem/species';
 import { evalAll, fmt, type CondResult } from './goals';
 import type { LevelDef } from './levels';
+import type { SessionSave } from './storage';
 
 export interface Point {
   x: number;
@@ -108,6 +111,47 @@ export class Game {
     this.hooks.changed();
   }
 
+  // --- Guardar y retomar ------------------------------------------------------
+
+  /**
+   * Estado de la partida como datos planos, o null si no es un buen momento
+   * para guardar (hay un vertido a medias, ya se ganó o no se hizo nada).
+   */
+  snapshot(): Omit<SessionSave, 'version' | 'savedAt'> | null {
+    if (this.won || this.pour || this.queue.length || this.actions === 0) return null;
+    return {
+      level: this.level.id,
+      actions: this.actions,
+      dose: this.dose,
+      vessels: this.vessels.map((v) => vesselToData(v)),
+    };
+  }
+
+  /** Retoma una partida guardada. Si los datos no cierran, el nivel queda como recién empezado. */
+  restore(s: SessionSave): boolean {
+    const valid =
+      s.level === this.level.id &&
+      Array.isArray(s.vessels) &&
+      s.vessels.length === this.vessels.length &&
+      Number.isInteger(s.actions) &&
+      s.actions >= 0;
+    if (valid) {
+      const fresh = this.vessels;
+      const ok = fresh.every((v, i) => this.isLocked(i) || vesselFromData(v, s.vessels[i]));
+      if (ok) {
+        this.actions = s.actions;
+        if (this.level.doses.includes(s.dose)) this.dose = s.dose;
+        this.hooks.changed();
+        return true;
+      }
+    }
+    // Algún recipiente pudo quedar a medio restaurar: se vuelve al inicio
+    this.setup();
+    this.actions = 0;
+    this.hooks.changed();
+    return false;
+  }
+
   // --- Acciones del jugador ---------------------------------------------------
 
   setDose(ml: number): void {
@@ -124,6 +168,13 @@ export class Game {
 
   tapReagent(i: number): void {
     this.selectReagent(this.selReagent === i ? null : i);
+  }
+
+  /** Elige un recipiente sin verter nada (teclado). */
+  selectVessel(i: number): void {
+    if (this.won || this.isLocked(i) || i === this.selVessel) return;
+    this.selVessel = i;
+    this.hooks.changed();
   }
 
   tapVessel(i: number): void {

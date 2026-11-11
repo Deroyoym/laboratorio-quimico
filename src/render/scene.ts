@@ -143,6 +143,8 @@ export class Scene {
    */
   private sprites = new Map<string, HTMLCanvasElement>();
 
+  /** Menos animación: sin vaivén del envase elegido ni flechas que se mueven */
+  calm = false;
   /** Envase que se está arrastrando con el dedo */
   drag: { idx: number; x: number; y: number } | null = null;
   /** Envase volviendo solo al estante después de soltarlo en cualquier lado */
@@ -214,8 +216,13 @@ export class Scene {
     if (this.dirty) return true;
     if (!running) return false;
     if (this.busy || this.drag) return true;
-    const ambient = this.game.selReagent !== null && !this.game.won;
+    const ambient = !this.calm && this.game.selReagent !== null && !this.game.won;
     return ambient && this.frame % 2 === 0;
+  }
+
+  /** ¿Hay algo moviéndose o reaccionando? */
+  isBusy(): boolean {
+    return this.busy;
   }
 
   setGame(game: Game): void {
@@ -248,8 +255,10 @@ export class Scene {
   private computeLayout(): void {
     const { W, H, game } = this;
     const n = game.reagents.length;
-    const slotW = Math.min(88, (W - 10) / n);
-    const bw = Math.min(56, slotW * 0.72, H * 0.12);
+    // En pantallas grandes (tableta, escritorio) todo puede crecer un poco más
+    const big = clamp(Math.min(W, H) / 480, 1, 1.6);
+    const slotW = Math.min(88 * big, (W - 10) / n);
+    const bw = Math.min(56 * big, slotW * 0.72, H * 0.12);
     const bh = bw * 1.72;
     const shelfY = 20 + bh;
     const plankH = 9;
@@ -262,7 +271,7 @@ export class Scene {
     const maxH = Math.max(...specs.map((v) => SHAPES[v.kind].h));
     const burner = !!game.level.tools.burner;
     const free = surfaceY - capBottom - 34;
-    let s = clamp(free / (maxH + (burner ? 60 : 0)), 0.5, 1.5);
+    let s = clamp(free / (maxH + (burner ? 60 : 0)), 0.5, 1.5 * big);
     // Que entren a lo ancho
     const widest = Math.max(...specs.map((v) => SHAPES[v.kind].w));
     s = Math.min(s, (W * 0.5) / widest);
@@ -556,7 +565,7 @@ export class Scene {
       const selected = game.selReagent === i;
       this.drawCaption(r, i, b, selected);
       if (i === activeIdx) return;
-      const lift = selected ? 7 + Math.sin(this.time * 4) * 1.5 : 0;
+      const lift = selected ? 7 + (this.calm ? 0 : Math.sin(this.time * 4) * 1.5) : 0;
       if (selected) this.drawGlow(b.x, b.y - b.h / 2 - lift, b.h * 0.72);
       this.blitBottle(i, b.x, b.y - b.h / 2 - lift, 0, false);
     });
@@ -687,7 +696,7 @@ export class Scene {
 
   private drawCaption(r: ReagentDef, i: number, b: BottleSlot, selected: boolean): void {
     const L = this.layout;
-    const size = clamp(L.slotW * 0.16, 10, 12);
+    const size = clamp(L.slotW * 0.16, 10, 15);
     const w = L.slotW + 8;
     const h = size * 2 + 10;
     const img = this.sprite(`c${i}${selected ? 's' : 'n'}`, w, h, (c) => {
@@ -764,7 +773,7 @@ export class Scene {
   private drawChevron(slot: VesselSlot, strong: boolean): void {
     const { ctx } = this;
     const size = (strong ? 9 : 7) * clamp(slot.scale, 0.8, 1.2);
-    const y = slot.topY - 12 - size + Math.sin(this.time * 5) * 3;
+    const y = slot.topY - 12 - size + (this.calm ? 0 : Math.sin(this.time * 5) * 3);
     ctx.save();
     ctx.globalAlpha = strong ? 1 : 0.8;
     ctx.fillStyle = TEAL;

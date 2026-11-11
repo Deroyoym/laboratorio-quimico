@@ -62,6 +62,17 @@ export interface Vessel {
   seen: Set<string>;
 }
 
+/** Estado de un recipiente como datos planos, para guardarlo */
+export interface VesselData {
+  vol: number;
+  temp: number;
+  maxTemp: number;
+  n: Record<string, number>;
+  susp: Record<string, number>;
+  gasOut: Record<string, number>;
+  seen: string[];
+}
+
 export type LabEvent =
   | { kind: 'solid'; sp: string }
   | { kind: 'gas'; sp: string }
@@ -96,6 +107,59 @@ export function emptyVessel(v: Vessel): void {
   v.heating = false;
   v.boiling = false;
   v.seen.clear();
+}
+
+/** Copia el estado de un recipiente a datos planos. El mechero no se guarda. */
+export function vesselToData(v: Vessel): VesselData {
+  const positive = (rec: Record<string, number>): Record<string, number> =>
+    Object.fromEntries(Object.entries(rec).filter(([, x]) => x > 0));
+  return {
+    vol: v.vol,
+    temp: v.temp,
+    maxTemp: v.maxTemp,
+    n: positive(v.n),
+    susp: positive(v.susp),
+    gasOut: positive(v.gasOut),
+    seen: [...v.seen],
+  };
+}
+
+/**
+ * Reconstruye un recipiente desde datos guardados. Valida todo antes de tocar
+ * el recipiente: si algo no cierra devuelve false y lo deja como estaba.
+ */
+export function vesselFromData(v: Vessel, d: unknown): boolean {
+  if (typeof d !== 'object' || d === null) return false;
+  const data = d as Partial<VesselData>;
+  const num = (x: unknown, lo: number, hi: number): x is number =>
+    typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi;
+  if (!num(data.vol, 0, v.capacity + 1e-6)) return false;
+  if (!num(data.temp, -60, 200) || !num(data.maxTemp, -60, 200)) return false;
+  const amounts = (rec: unknown): Record<string, number> | null => {
+    if (typeof rec !== 'object' || rec === null) return null;
+    const out: Record<string, number> = {};
+    for (const [sp, x] of Object.entries(rec)) {
+      // Una especie que ya no existe o una cantidad imposible invalidan el guardado
+      if (!(sp in SPECIES) || !num(x, 0, 1e3)) return null;
+      out[sp] = x;
+    }
+    return out;
+  };
+  const n = amounts(data.n);
+  const susp = amounts(data.susp);
+  const gasOut = amounts(data.gasOut);
+  if (!n || !susp || !gasOut) return false;
+  if (!Array.isArray(data.seen) || !data.seen.every((x) => typeof x === 'string')) return false;
+
+  emptyVessel(v);
+  v.vol = Math.min(data.vol, v.capacity);
+  v.temp = data.temp;
+  v.maxTemp = Math.max(data.maxTemp, data.temp);
+  v.n = n;
+  v.susp = susp;
+  v.gasOut = gasOut;
+  v.seen = new Set(data.seen);
+  return true;
 }
 
 const mol = (v: Vessel, sp: string): number => v.n[sp] ?? 0;
