@@ -6,6 +6,7 @@ import { Game } from './game/game';
 import { fmt } from './game/goals';
 import { LEVELS } from './game/levels';
 import { clearProgress, isUnlocked, loadProgress, saveProgress, type Progress } from './game/storage';
+import { PerfProbe } from './perf';
 import { Scene } from './render/scene';
 
 const ICON = {
@@ -56,6 +57,7 @@ app.innerHTML = `
       <ul id="goals" class="goals"></ul>
     </header>
     <div class="stage">
+      <canvas id="lab-bg" aria-hidden="true"></canvas>
       <canvas id="lab"></canvas>
       <div id="toasts" class="toasts" aria-live="polite"></div>
     </div>
@@ -195,7 +197,10 @@ function startLevel(i: number): void {
   game = new Game(level, {
     toast,
     sfx: (name) => sound.play(name),
-    changed: () => (uiDirty = true),
+    changed: () => {
+      uiDirty = true;
+      scene?.invalidate();
+    },
     won: onWin,
   });
   menuEl.classList.add('hidden');
@@ -209,7 +214,7 @@ function startLevel(i: number): void {
     .map(() => '<li><span class="mark"></span><span class="label"></span><span class="value"></span></li>')
     .join('');
 
-  if (!scene) scene = new Scene(canvas, game);
+  if (!scene) scene = new Scene(canvas, $<HTMLCanvasElement>('lab-bg'), game);
   else scene.setGame(game);
   scene.resize();
   uiDirty = true;
@@ -470,25 +475,65 @@ canvas.addEventListener('pointercancel', (e) => endPress(e, true));
 
 new ResizeObserver(() => scene?.resize()).observe(canvas);
 
+const perf = new PerfProbe();
+
+/**
+ * Resolución adaptativa: si los cuadros pintados salen lentos se baja la
+ * resolución del canvas un escalón. Si bajar no mejora, el problema no eran
+ * los píxeles: se vuelve atrás y no se insiste.
+ */
+const QUALITY_STEPS = [1, 0.8, 0.64];
+const adapt = { step: 0, sum: 0, n: 0, before: 0, locked: false };
+function trackFrameTime(interval: number): void {
+  if (adapt.locked || interval > 100) return;
+  adapt.sum += interval;
+  if (++adapt.n < 45) return;
+  const avg = adapt.sum / adapt.n;
+  adapt.sum = 0;
+  adapt.n = 0;
+  if (adapt.before > 0) {
+    // Recién se bajó un escalón: ¿sirvió?
+    if (avg > adapt.before * 0.9) {
+      adapt.step--;
+      adapt.locked = true;
+      scene?.setQuality(QUALITY_STEPS[adapt.step]);
+    }
+    adapt.before = 0;
+    return;
+  }
+  if (avg > 22 && adapt.step < QUALITY_STEPS.length - 1) {
+    adapt.before = avg;
+    adapt.step++;
+    scene?.setQuality(QUALITY_STEPS[adapt.step]);
+  }
+}
+
 let last = performance.now();
 function frame(now: number): void {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const interval = now - last;
+  const dt = Math.min(0.05, interval / 1000);
   last = now;
   const playing = !!game && !!scene && !playEl.classList.contains('hidden');
   // Con un cartel abierto la química queda en pausa
   const running = playing && (modalEl.classList.contains('hidden') || game!.won);
   soundFrame(dt, running);
   if (game && scene && playing) {
-    if (running) {
-      game.update(dt);
-      scene.update(dt);
+    const t0 = performance.now();
+    if (running) game.update(dt);
+    const t1 = performance.now();
+    if (running) scene.update(dt);
+    const t2 = performance.now();
+    if (scene.shouldDraw(running)) {
+      scene.draw();
+      trackFrameTime(interval);
     }
-    scene.draw();
+    const t3 = performance.now();
     uiTimer += dt;
     if (uiDirty || uiTimer > 0.1) {
       uiTimer = 0;
       refreshUi();
     }
+    perf.record(interval, t1 - t0, t2 - t1, t3 - t2, performance.now() - t3);
   }
   requestAnimationFrame(frame);
 }
@@ -499,7 +544,13 @@ showMenu();
 // Acceso para pruebas automáticas y para curiosear desde la consola
 declare global {
   interface Window {
-    lab?: { game: () => Game | null; start: (i: number) => void; sound: Sound };
+    lab?: {
+      game: () => Game | null;
+      start: (i: number) => void;
+      sound: Sound;
+      perf: PerfProbe;
+      quality: () => number;
+    };
   }
 }
-window.lab = { game: () => game, start: startLevel, sound };
+window.lab = { game: () => game, start: startLevel, sound, perf, quality: () => QUALITY_STEPS[adapt.step] };

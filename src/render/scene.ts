@@ -1,4 +1,4 @@
-import { liquidLook, sediment, type Vessel } from '../chem/engine';
+import { liquidLook, sediment, type LiquidLook, type Sediment, type Vessel } from '../chem/engine';
 import type { ReagentDef } from '../chem/reagents';
 import { CHUNKS, POWDERS, type PieceKind, type RGB } from '../chem/species';
 import { BACK_TIME, GO_TIME, type Game, type Point, type Pour } from '../game/game';
@@ -20,6 +20,9 @@ interface VesselSlot {
   shape: Shape;
   /** Semiancho de la zona táctil */
   hitHalf: number;
+  /** Contorno cerrado del vidrio y contorno interior (para recortar el contenido) */
+  outer: Path2D;
+  inner: Path2D;
 }
 
 interface Layout {
@@ -66,7 +69,17 @@ interface Fx {
   bubAcc: number;
   steamAcc: number;
   dispTemp: number;
+  /** Aspecto calculado una vez por cuadro y compartido entre partículas y dibujo */
+  look: LiquidLook | null;
+  sed: Sediment;
+  /** Altura relativa del líquido y del sedimento */
+  lt: number;
+  st: number;
+  /** Lo último que se pintó, para saber si algo cambió */
+  sig: Float32Array;
 }
+
+const SIG_SIZE = 12;
 
 const TEAL = '#2fbfa6';
 const OUTLINE = 'rgba(66,96,114,0.82)';
@@ -110,20 +123,99 @@ export class Scene {
   private H = 0;
   private dpr = 1;
   private layout!: Layout;
-  private bg: HTMLCanvasElement | null = null;
+  /** Capa de fondo: pared, estante y mesada. Solo se repinta al cambiar el tamaño. */
+  private bgCanvas: HTMLCanvasElement;
+  private bgStale = true;
   private fx = new Map<Vessel, Fx>();
   private time = 0;
+  /** Factor de resolución (1 = nitidez completa); baja en dispositivos lentos */
+  private quality = 1;
+  /** Hay que repintar aunque nada se mueva (cambió la selección, el tamaño…) */
+  private dirty = true;
+  /** Algo se está moviendo o reaccionando */
+  private busy = false;
+  private frame = 0;
+  private sigTmp = new Float32Array(SIG_SIZE);
+  /**
+   * Imágenes ya dibujadas de lo que no cambia (envases, rótulos, vidrio). Se
+   * pintan una vez y después solo se copian: mucho más barato que rehacer
+   * trazos y texto en cada cuadro.
+   */
+  private sprites = new Map<string, HTMLCanvasElement>();
 
   /** Envase que se está arrastrando con el dedo */
   drag: { idx: number; x: number; y: number } | null = null;
   /** Envase volviendo solo al estante después de soltarlo en cualquier lado */
   private returning: { idx: number; from: Point; t: number } | null = null;
 
-  constructor(canvas: HTMLCanvasElement, game: Game) {
+  constructor(canvas: HTMLCanvasElement, bgCanvas: HTMLCanvasElement, game: Game) {
     this.canvas = canvas;
+    this.bgCanvas = bgCanvas;
     this.ctx = canvas.getContext('2d')!;
     this.game = game;
     this.resize();
+  }
+
+  /** Devuelve una imagen en caché de w × h (px CSS), pintándola la primera vez. */
+  private sprite(key: string, w: number, h: number, paint: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement {
+    let c = this.sprites.get(key);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.width = Math.ceil(w * this.dpr);
+      c.height = Math.ceil(h * this.dpr);
+      const ctx = c.getContext('2d')!;
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      paint(ctx);
+      this.sprites.set(key, c);
+    }
+    return c;
+  }
+
+  /** Copia el envase i centrado en (cx, cy), girado si hace falta. */
+  private blitBottle(i: number, cx: number, cy: number, angle: number, open: boolean): void {
+    const b = this.layout.bottles[i];
+    const pad = 6;
+    const w = b.w + pad * 2;
+    const h = b.h + pad * 2;
+    const img = this.sprite(`b${i}${open ? 'o' : 'c'}`, w, h, (c) =>
+      drawBottle(c, this.game.reagents[i], w / 2, h / 2, b.w, b.h, 0, open),
+    );
+    const ctx = this.ctx;
+    if (angle === 0) {
+      ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+      return;
+    }
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+
+  /** Pide repintar en el próximo cuadro. */
+  invalidate(): void {
+    this.dirty = true;
+  }
+
+  /** Cambia el factor de resolución del canvas. */
+  setQuality(q: number): void {
+    if (q === this.quality) return;
+    this.quality = q;
+    this.resize();
+  }
+
+  /**
+   * ¿Hace falta pintar este cuadro? Si no hay nada moviéndose se saltea el
+   * repintado; con solo la animación de "reactivo elegido" se pinta a media
+   * frecuencia.
+   */
+  shouldDraw(running: boolean): boolean {
+    this.frame++;
+    if (this.dirty) return true;
+    if (!running) return false;
+    if (this.busy || this.drag) return true;
+    const ambient = this.game.selReagent !== null && !this.game.won;
+    return ambient && this.frame % 2 === 0;
   }
 
   setGame(game: Game): void {
@@ -131,7 +223,8 @@ export class Scene {
     this.fx.clear();
     this.drag = null;
     this.returning = null;
-    this.bg = null;
+    this.bgStale = true;
+    this.dirty = true;
     this.computeLayout();
   }
 
@@ -139,10 +232,14 @@ export class Scene {
     const rect = this.canvas.getBoundingClientRect();
     this.W = Math.max(200, rect.width);
     this.H = Math.max(200, rect.height);
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-    this.canvas.width = Math.round(this.W * this.dpr);
-    this.canvas.height = Math.round(this.H * this.dpr);
-    this.bg = null;
+    // Más de 2× casi no se nota en un teléfono y cuesta muchos píxeles por cuadro
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2) * this.quality;
+    for (const c of [this.canvas, this.bgCanvas]) {
+      c.width = Math.round(this.W * this.dpr);
+      c.height = Math.round(this.H * this.dpr);
+    }
+    this.bgStale = true;
+    this.dirty = true;
     this.computeLayout();
   }
 
@@ -181,6 +278,12 @@ export class Scene {
       const shape = SHAPES[spec.kind];
       const cx = spec.x * W;
       const baseY = surfaceY - tripod - (spec.kind === 'tubo' ? 7 * s : 0);
+      const outer = new Path2D();
+      tracePath(outer, shape, cx, baseY, s);
+      outer.closePath();
+      const inner = new Path2D();
+      tracePath(inner, shape, cx, baseY, s, 1.7);
+      inner.closePath();
       return {
         cx,
         baseY,
@@ -188,10 +291,13 @@ export class Scene {
         scale: s,
         shape,
         hitHalf: Math.max((shape.w * s) / 2 + 12, 30),
+        outer,
+        inner,
       };
     });
 
     this.layout = { bottles, vessels, slotW, shelfY, plankH, capBottom, benchY, surfaceY, tripod, s };
+    this.sprites.clear();
   }
 
   hitBottle(x: number, y: number): number {
@@ -225,6 +331,7 @@ export class Scene {
   /** El envase soltado vuelve animado a su lugar. */
   releaseBottle(idx: number, from: Point): void {
     this.returning = { idx, from, t: 0 };
+    this.dirty = true;
   }
 
   // --- Partículas ------------------------------------------------------------
@@ -232,10 +339,59 @@ export class Scene {
   private fxFor(v: Vessel): Fx {
     let f = this.fx.get(v);
     if (!f) {
-      f = { bubbles: [], flakes: [], steam: [], bubAcc: 0, steamAcc: 0, dispTemp: v.temp };
+      f = {
+        bubbles: [],
+        flakes: [],
+        steam: [],
+        bubAcc: 0,
+        steamAcc: 0,
+        dispTemp: v.temp,
+        look: null,
+        sed: { ml: 0, rgb: [255, 255, 255] },
+        lt: 0,
+        st: 0,
+        sig: new Float32Array(SIG_SIZE).fill(-1),
+      };
       this.fx.set(v, f);
     }
     return f;
+  }
+
+  /** Calcula el aspecto del contenido; se hace una vez por cuadro. */
+  private prepare(v: Vessel, slot: VesselSlot, f: Fx): void {
+    f.look = liquidLook(v);
+    f.sed = sediment(v);
+    f.lt = levelFor(slot.shape, v.vol / v.capacity);
+    f.st = f.sed.ml > 0 ? levelFor(slot.shape, f.sed.ml / v.capacity) : 0;
+  }
+
+  /** ¿Cambió lo que se ve de este recipiente desde el último cuadro? */
+  private changed(v: Vessel, f: Fx): boolean {
+    const s = this.sigTmp;
+    const look = f.look!;
+    s[0] = Math.round(v.vol * 20);
+    s[1] = Math.round(f.dispTemp * 4);
+    s[2] = Math.round(look.rgb[0]);
+    s[3] = Math.round(look.rgb[1]);
+    s[4] = Math.round(look.rgb[2]);
+    s[5] = Math.round(look.alpha * 100);
+    s[6] = Math.round(f.sed.ml * 20);
+    s[7] = Math.round(f.sed.rgb[0] + f.sed.rgb[1] + f.sed.rgb[2]);
+    let chunks = 0;
+    for (const c of CHUNKS) chunks += v.n[c.id] ?? 0;
+    s[8] = Math.round(chunks * 2e5);
+    s[9] = v.heating ? 1 : 0;
+    s[10] = f.bubbles.length + f.flakes.length + f.steam.length;
+    s[11] = v.boiling ? 1 : 0;
+    let diff = false;
+    for (let i = 0; i < SIG_SIZE; i++) {
+      if (f.sig[i] !== s[i]) {
+        diff = true;
+        f.sig[i] = s[i];
+      }
+    }
+    // Las partículas y la llama se mueven aunque su cantidad no cambie
+    return diff || s[10] > 0 || v.heating;
   }
 
   update(dt: number): void {
@@ -245,13 +401,14 @@ export class Scene {
       if (this.returning.t >= 0.22) this.returning = null;
     }
     const { game, layout } = this;
+    let busy = !!game.pour || !!this.returning;
     game.vessels.forEach((v, i) => {
       const slot = layout.vessels[i];
       const f = this.fxFor(v);
       const h = slot.shape.h * slot.scale;
-      const lt = levelFor(slot.shape, v.vol / v.capacity);
-      const sed = sediment(v);
-      const st = Math.min(lt, sed.ml > 0 ? levelFor(slot.shape, sed.ml / v.capacity) : 0);
+      this.prepare(v, slot, f);
+      const lt = f.lt;
+      const st = Math.min(lt, f.st);
       f.dispTemp += (v.temp - f.dispTemp) * (1 - Math.exp(-dt / 0.45));
 
       // Burbujas: gas de reacción, ebullición y salpicado del chorro
@@ -348,7 +505,11 @@ export class Scene {
         p.r += 7 * dt;
         if (p.life >= p.max) f.steam.splice(k, 1);
       }
+      if (this.changed(v, f)) busy = true;
     });
+    // Al terminar el movimiento hace falta un cuadro más para dejar todo en su lugar
+    if (this.busy && !busy) this.dirty = true;
+    this.busy = busy;
   }
 
   /** Posición de cada trozo de metal en el fondo (u, t) con su tamaño relativo. */
@@ -381,9 +542,10 @@ export class Scene {
 
   draw(): void {
     const { ctx, W, H, game, layout: L } = this;
+    if (this.bgStale) this.renderBackground();
+    this.dirty = false;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    if (!this.bg) this.bg = this.renderBackground();
-    ctx.drawImage(this.bg, 0, 0, W, H);
+    ctx.clearRect(0, 0, W, H);
 
     const pour = game.pour;
     const activeIdx = pour ? pour.reagent : this.drag ? this.drag.idx : this.returning ? this.returning.idx : -1;
@@ -392,14 +554,13 @@ export class Scene {
     game.reagents.forEach((r, i) => {
       const b = L.bottles[i];
       const selected = game.selReagent === i;
-      this.drawCaption(r, b, selected);
+      this.drawCaption(r, i, b, selected);
       if (i === activeIdx) return;
       const lift = selected ? 7 + Math.sin(this.time * 4) * 1.5 : 0;
       if (selected) this.drawGlow(b.x, b.y - b.h / 2 - lift, b.h * 0.72);
-      drawBottle(ctx, r, b.x, b.y - b.h / 2 - lift, b.w, b.h, 0, false);
+      this.blitBottle(i, b.x, b.y - b.h / 2 - lift, 0, false);
     });
 
-    this.drawRack();
     const openVessels = game.vessels.filter((_, i) => !game.isLocked(i)).length;
     game.vessels.forEach((v, i) => {
       const slot = L.vessels[i];
@@ -420,33 +581,27 @@ export class Scene {
     // Envase en movimiento
     if (pour) this.drawPour(pour);
     else if (this.drag) {
-      const r = game.reagents[this.drag.idx];
       const b = L.bottles[this.drag.idx];
       const y = this.drag.y - b.h * 0.75;
       this.drawGlow(this.drag.x, y, b.h * 0.7);
-      drawBottle(ctx, r, this.drag.x, y, b.w, b.h, 0, false);
+      this.blitBottle(this.drag.idx, this.drag.x, y, 0, false);
     } else if (this.returning) {
       const b = L.bottles[this.returning.idx];
       const u = ease(this.returning.t / 0.22);
-      drawBottle(
-        ctx,
-        game.reagents[this.returning.idx],
+      this.blitBottle(
+        this.returning.idx,
         lerp(this.returning.from.x, b.x, u),
         lerp(this.returning.from.y, b.y - b.h / 2, u),
-        b.w,
-        b.h,
         0,
         false,
       );
     }
   }
 
-  private renderBackground(): HTMLCanvasElement {
+  private renderBackground(): void {
     const { W, H, dpr, layout: L } = this;
-    const c = document.createElement('canvas');
-    c.width = Math.round(W * dpr);
-    c.height = Math.round(H * dpr);
-    const ctx = c.getContext('2d')!;
+    this.bgStale = false;
+    const ctx = this.bgCanvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // Pared de azulejos
@@ -527,19 +682,23 @@ export class Scene {
     wallShadow.addColorStop(1, 'rgba(60,80,90,0.2)');
     ctx.fillStyle = wallShadow;
     ctx.fillRect(0, L.benchY - 12, W, 12);
-    return c;
+    this.drawRack(ctx);
   }
 
-  private drawCaption(r: ReagentDef, b: BottleSlot, selected: boolean): void {
-    const { ctx, layout: L } = this;
-    const size = clamp(L.slotW * 0.15, 9, 11.5);
-    ctx.font = `${selected ? 700 : 600} ${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = selected ? '#0f8f7a' : '#4a5d68';
-    const y = L.shelfY + L.plankH + size + 3;
-    ctx.fillText(r.caption[0], b.x, y);
-    if (r.caption[1]) ctx.fillText(r.caption[1], b.x, y + size + 1.5);
+  private drawCaption(r: ReagentDef, i: number, b: BottleSlot, selected: boolean): void {
+    const L = this.layout;
+    const size = clamp(L.slotW * 0.16, 10, 12);
+    const w = L.slotW + 8;
+    const h = size * 2 + 10;
+    const img = this.sprite(`c${i}${selected ? 's' : 'n'}`, w, h, (c) => {
+      c.font = `${selected ? 700 : 600} ${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      c.textAlign = 'center';
+      c.textBaseline = 'alphabetic';
+      c.fillStyle = selected ? '#0b7f6c' : '#42545f';
+      c.fillText(r.caption[0], w / 2, size + 3);
+      if (r.caption[1]) c.fillText(r.caption[1], w / 2, size * 2 + 4.5);
+    });
+    this.ctx.drawImage(img, b.x - w / 2, L.shelfY + L.plankH, w, h);
   }
 
   private drawGlow(x: number, y: number, radius: number): void {
@@ -559,7 +718,7 @@ export class Scene {
     ctx.save();
     ctx.strokeStyle = TEAL;
     ctx.lineWidth = 2.5;
-    ctx.globalAlpha = 0.75 + Math.sin(this.time * 4) * 0.2;
+    ctx.globalAlpha = 0.9;
     ctx.beginPath();
     ctx.ellipse(slot.cx, L.surfaceY + 2, rx, 6, 0, 0, Math.PI * 2);
     ctx.stroke();
@@ -623,8 +782,8 @@ export class Scene {
   }
 
   /** Gradilla de madera para los tubos de ensayo. */
-  private drawRack(): void {
-    const { ctx, layout: L } = this;
+  private drawRack(ctx: CanvasRenderingContext2D): void {
+    const L = this.layout;
     const tubes = L.vessels.filter((v) => v.shape.kind === 'tubo');
     if (!tubes.length) return;
     const s = L.s;
@@ -727,12 +886,12 @@ export class Scene {
     const { shape, cx, baseY, scale: s, topY } = slot;
     const h = shape.h * s;
     const f = this.fxFor(v);
-    const look = liquidLook(v);
-    const lt = levelFor(shape, v.vol / v.capacity);
+    if (!f.look) this.prepare(v, slot, f);
+    const look = f.look!;
+    const lt = f.lt;
     const yL = baseY - lt * h;
-    const sed = sediment(v);
-    const stRaw = sed.ml > 0 ? levelFor(shape, sed.ml / v.capacity) : 0;
-    const st = lt > 0 ? Math.min(stRaw, lt * 0.9) : stRaw;
+    const sed = f.sed;
+    const st = lt > 0 ? Math.min(f.st, lt * 0.9) : f.st;
     const maxHW = (shape.w * s) / 2;
 
     // Sombra sobre la mesada (o la rejilla)
@@ -744,20 +903,14 @@ export class Scene {
     }
 
     // Vidrio de fondo
-    ctx.beginPath();
-    tracePath(ctx, shape, cx, baseY, s);
-    ctx.closePath();
     ctx.fillStyle = 'rgba(244,250,253,0.34)';
-    ctx.fill();
+    ctx.fill(slot.outer);
 
     if (shape.thermo) this.drawThermometer(slot, f.dispTemp);
 
     // Contenido, recortado por dentro del vidrio
     ctx.save();
-    ctx.beginPath();
-    tracePath(ctx, shape, cx, baseY, s, 1.7);
-    ctx.closePath();
-    ctx.clip();
+    ctx.clip(slot.inner);
 
     // Sedimento
     if (st > 0) {
@@ -855,10 +1008,7 @@ export class Scene {
     const cold = lt > 0 ? clamp((13 - f.dispTemp) / 9, 0, 1) : 0;
     if (cold > 0.02) {
       ctx.save();
-      ctx.beginPath();
-      tracePath(ctx, shape, cx, baseY, s);
-      ctx.closePath();
-      ctx.clip();
+      ctx.clip(slot.outer);
       const top = yL - 10 * s;
       const frost = ctx.createLinearGradient(0, top, 0, top + 14 * s);
       frost.addColorStop(0, 'rgba(236,246,255,0)');
@@ -877,67 +1027,17 @@ export class Scene {
       ctx.restore();
     }
 
-    // Brillo del vidrio
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = Math.max(2, shape.kind === 'tubo' ? 2.4 * s : 4.5 * s);
-    ctx.beginPath();
-    for (let k = 0; k <= 16; k++) {
-      const t = 0.1 + (0.8 * k) / 16;
-      const x = cx - halfWidth(shape, t, s) * (shape.kind === 'tubo' ? 0.45 : 0.8);
-      const y = baseY - t * h;
-      if (k === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.restore();
-
-    // Graduación
-    if (shape.kind !== 'tubo') {
-      ctx.strokeStyle = 'rgba(56,84,100,0.7)';
-      ctx.fillStyle = 'rgba(56,84,100,0.85)';
-      ctx.lineWidth = 1;
-      ctx.font = `600 ${Math.max(7, 8.5 * s)}px system-ui, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      for (let k = 1; k <= 4; k++) {
-        const frac = k / 4;
-        const t = levelFor(shape, frac);
-        const hw = halfWidth(shape, t, s);
-        const y = baseY - t * h;
-        const xa = cx - hw * 0.58;
-        ctx.beginPath();
-        ctx.moveTo(xa, y);
-        ctx.lineTo(xa + (k % 2 === 0 ? 14 : 8) * s, y);
-        ctx.stroke();
-        // En el cuello del erlenmeyer el número taparía al termómetro
-        const room = shape.kind !== 'erlenmeyer' || k < 4;
-        if (k % 2 === 0 && room) ctx.fillText(String(Math.round(v.capacity * frac)), xa + 17 * s, y);
-      }
-    }
-
-    // Contorno
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = OUTLINE;
-    ctx.lineWidth = 2.1;
-    ctx.beginPath();
-    tracePath(ctx, shape, cx, baseY, s);
-    ctx.stroke();
-    // Boca
-    const mouth = halfWidth(shape, 1, s);
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.ellipse(cx, topY, mouth, Math.max(1.3, mouth * 0.07), 0, 0, Math.PI * 2);
-    ctx.stroke();
-    if (shape.kind === 'vaso') {
-      // Pico vertedor
-      ctx.beginPath();
-      ctx.moveTo(cx - mouth, topY);
-      ctx.quadraticCurveTo(cx - mouth - 6 * s, topY - 1.5 * s, cx - mouth - 7 * s, topY - 4.5 * s);
-      ctx.stroke();
-    }
+    // Brillo, graduación y contorno: no cambian, van como imagen en caché
+    const pad = 12 * s + 4;
+    const gx = Math.floor(cx - maxHW - pad);
+    const gy = Math.floor(topY - pad);
+    const gw = Math.ceil(maxHW * 2 + pad * 2) + 1;
+    const gh = Math.ceil(h + pad * 2) + 1;
+    const glass = this.sprite(`g${Math.round(cx)}:${shape.kind}:${v.capacity}`, gw, gh, (c) => {
+      c.translate(-gx, -gy);
+      paintGlassFront(c, slot, v.capacity);
+    });
+    ctx.drawImage(glass, gx, gy, gw, gh);
 
     // Vapor
     for (const p of f.steam) {
@@ -1104,7 +1204,74 @@ export class Scene {
       }
     }
 
-    drawBottle(ctx, r, pos.x, pos.y, b.w, b.h, angle, Math.abs(angle) > 0.3);
+    this.blitBottle(p.reagent, pos.x, pos.y, angle, Math.abs(angle) > 0.3);
+  }
+}
+
+/** Parte fija del vidrio que va por delante del contenido: brillo, graduación y contorno. */
+function paintGlassFront(ctx: CanvasRenderingContext2D, slot: VesselSlot, capacity: number): void {
+  const { shape, cx, baseY, scale: s, topY } = slot;
+  const h = shape.h * s;
+  // Brillo del vidrio
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = Math.max(2, shape.kind === 'tubo' ? 2.4 * s : 4.5 * s);
+  ctx.beginPath();
+  for (let k = 0; k <= 16; k++) {
+    const t = 0.1 + (0.8 * k) / 16;
+    const x = cx - halfWidth(shape, t, s) * (shape.kind === 'tubo' ? 0.45 : 0.8);
+    const y = baseY - t * h;
+    if (k === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Graduación
+  if (shape.kind !== 'tubo') {
+    ctx.strokeStyle = 'rgba(56,84,100,0.7)';
+    ctx.fillStyle = 'rgba(56,84,100,0.85)';
+    ctx.lineWidth = 1;
+    ctx.font = `600 ${Math.max(7, 8.5 * s)}px system-ui, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (let k = 1; k <= 4; k++) {
+      const frac = k / 4;
+      const t = levelFor(shape, frac);
+      const hw = halfWidth(shape, t, s);
+      const y = baseY - t * h;
+      const xa = cx - hw * 0.58;
+      ctx.beginPath();
+      ctx.moveTo(xa, y);
+      ctx.lineTo(xa + (k % 2 === 0 ? 14 : 8) * s, y);
+      ctx.stroke();
+      // En el cuello del erlenmeyer el número taparía al termómetro
+      const room = shape.kind !== 'erlenmeyer' || k < 4;
+      if (k % 2 === 0 && room) ctx.fillText(String(Math.round(capacity * frac)), xa + 17 * s, y);
+    }
+  }
+
+  // Contorno
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 2.1;
+  ctx.beginPath();
+  tracePath(ctx, shape, cx, baseY, s);
+  ctx.stroke();
+  // Boca
+  const mouth = halfWidth(shape, 1, s);
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.ellipse(cx, topY, mouth, Math.max(1.3, mouth * 0.07), 0, 0, Math.PI * 2);
+  ctx.stroke();
+  if (shape.kind === 'vaso') {
+    // Pico vertedor
+    ctx.beginPath();
+    ctx.moveTo(cx - mouth, topY);
+    ctx.quadraticCurveTo(cx - mouth - 6 * s, topY - 1.5 * s, cx - mouth - 7 * s, topY - 4.5 * s);
+    ctx.stroke();
   }
 }
 
