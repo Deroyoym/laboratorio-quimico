@@ -11,8 +11,6 @@
  * el contexto se crea en `unlock`.
  */
 
-const KEY = 'laboratorio-quimico.sonido';
-
 export type SoundName =
   | 'tap'
   | 'select'
@@ -23,6 +21,7 @@ export type SoundName =
   | 'burnerOn'
   | 'burnerOff'
   | 'observe'
+  | 'goal'
   | 'warn'
   | 'win';
 
@@ -48,14 +47,8 @@ export class Sound {
   private level: Ambience = { ...SILENCE };
   private blipAcc = 0;
 
-  constructor() {
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(KEY);
-    } catch {
-      // sin almacenamiento: queda activado
-    }
-    this.enabled = stored !== 'off';
+  constructor(enabled: boolean) {
+    this.enabled = enabled;
     document.addEventListener('visibilitychange', () => {
       if (!this.ctx) return;
       if (document.hidden) void this.ctx.suspend();
@@ -72,11 +65,6 @@ export class Sound {
 
   setEnabled(on: boolean): void {
     this.enabled = on;
-    try {
-      localStorage.setItem(KEY, on ? 'on' : 'off');
-    } catch {
-      // sin almacenamiento: vale solo para esta sesión
-    }
     if (on) this.unlock();
     else if (this.ctx) void this.ctx.suspend();
   }
@@ -202,6 +190,10 @@ export class Sound {
       case 'observe':
         this.tone(t, 880, 0.22, 0.045);
         this.tone(t + 0.1, 1318.5, 0.3, 0.045);
+        break;
+      case 'goal':
+        this.tone(t, 1046.5, 0.12, 0.04);
+        this.tone(t + 0.07, 1568, 0.2, 0.04);
         break;
       case 'warn':
         this.tone(t, 207.65, 0.14, 0.07, 'triangle');

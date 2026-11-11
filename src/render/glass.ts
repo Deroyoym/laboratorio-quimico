@@ -98,7 +98,7 @@ export function levelFor(shape: Shape, frac: number): number {
  * para recortar el contenido por dentro del vidrio.
  */
 export function tracePath(
-  ctx: CanvasRenderingContext2D,
+  ctx: Pick<CanvasRenderingContext2D, 'moveTo' | 'lineTo'>,
   shape: Shape,
   cx: number,
   baseY: number,

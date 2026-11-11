@@ -36,7 +36,15 @@ depende de lo que haya detectado el proyecto al importarlo.
   reinicia el nivel; «Pista» da ayudas de a una.
 - Se gana cuando un mismo recipiente cumple todos los objetivos. Las estrellas
   dependen de la cantidad de acciones.
-- El parlante de arriba silencia el juego; la elección queda guardada.
+- El botón de ajustes (arriba a la derecha) tiene sonido, vibración y «menos
+  animación», y en el nivel sirve de pausa.
+- Si cerrás la pestaña a mitad de un nivel, el menú ofrece seguir donde lo
+  dejaste. El botón atrás del teléfono cierra el cartel abierto o vuelve al
+  menú.
+
+Con teclado: `1`–`9` eligen un reactivo, `←` `→` el recipiente, `↑` `↓` la
+dosis, `Enter` vierte, `M` mechero, `V` vaciar, `R` reiniciar, `P` pista y
+`Esc` vuelve.
 
 ## Niveles
 
@@ -71,7 +79,11 @@ src/
     scene.ts      dibujo en canvas y partículas
   audio/
     sound.ts      efectos y ambiente sintetizados con Web Audio
-  main.ts         menú, HUD y entrada táctil
+  ui/
+    nav.ts        pila de pantallas atada al historial (botón atrás)
+    sheet.ts      hojas modales con manejo de foco
+  perf.ts         medidor de tiempos por cuadro
+  main.ts         menú, HUD, ajustes y entrada (táctil y teclado)
 tests/            soluciones de cada nivel jugadas contra el motor
 ```
 
@@ -103,6 +115,32 @@ se suman sin corrección, las sales muy solubles se tratan como ideales y cada
 nivel ofrece solo reactivos cuyas combinaciones están modeladas. Cuando dos
 reactivos están en proporción exacta, el final de la reacción se acelera para
 que no se arrastre indefinidamente.
+
+### Guardado
+
+Hay dos claves de `localStorage`: el **progreso** (estrellas, mejor marca y
+ajustes) y la **partida en curso** (el contenido de los recipientes), que es
+un autoguardado y nunca pisa al progreso.
+
+- Todo guardado lleva `version`. Al cargar uno viejo se aplican las
+  migraciones en orden (`MIGRATIONS` en `storage.ts`).
+- Antes de reemplazar el progreso se copia el anterior a `.bak`; si el
+  principal no se puede leer se usa la copia.
+- Lo que se lee se valida: niveles que ya no existen se descartan, números
+  fuera de rango se corrigen y una partida con datos imposibles se rechaza.
+- Si no se puede escribir (almacenamiento lleno o bloqueado) se le avisa al
+  jugador en vez de seguir como si nada.
+
+Para cambiar el formato: subir `SAVE_VERSION`, agregar la migración desde la
+versión anterior y un test en `tests/storage.test.ts`.
+
+### Rendimiento
+
+El costo está en repintar píxeles, no en la simulación, así que el dibujo
+evita trabajo: el fondo va en un canvas aparte, lo que no cambia se guarda
+como imagen, no se repinta si nada se mueve y la resolución baja sola en
+dispositivos lentos. `window.lab.perf.report()` en la consola da el tiempo
+por cuadro de cada etapa, para medir antes y después de un cambio.
 
 ### Agregar un nivel
 
