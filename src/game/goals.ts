@@ -11,7 +11,10 @@ export type Cond =
   | { kind: 'noSolid'; sp: string; label: string }
   | { kind: 'aqMax'; sp: string; conc: number; label: string }
   | { kind: 'gasMin'; sp: string; ml: number; label: string }
-  | { kind: 'tempNever'; max: number; label: string };
+  | { kind: 'tempNever'; max: number; label: string }
+  | { kind: 'tempMax'; max: number; label: string }
+  | { kind: 'concRange'; sp: string; min: number; max: number; label: string }
+  | { kind: 'volMin'; min: number; label: string };
 
 export interface CondResult {
   ok: boolean;
@@ -63,6 +66,17 @@ export function evalCond(c: Cond, v: Vessel, showPh: boolean): CondResult {
       const ml = (v.gasOut[c.sp] ?? 0) * MOLAR_GAS_ML;
       return { ok: ml >= c.ml, label: c.label, value: `${Math.floor(ml)} mL` };
     }
+    case 'tempMax':
+      return { ok: wet && v.temp <= c.max, label: c.label, value: wet ? `${fmt(v.temp)} °C` : undefined };
+    case 'concRange': {
+      const x = conc(v, c.sp);
+      const ok = wet && x >= c.min && x <= c.max;
+      // Se compara a ojo con el patrón: no se muestra el número
+      const value = !wet ? undefined : x < c.min ? 'más claro' : x > c.max ? 'más oscuro' : 'igual';
+      return { ok, label: c.label, value };
+    }
+    case 'volMin':
+      return { ok: v.vol >= c.min - 1e-6, label: c.label, value: `${fmt(v.vol, 0)} mL` };
     case 'tempNever': {
       const broken = v.maxTemp > c.max;
       return { ok: !broken, label: c.label, value: `máx. ${fmt(v.maxTemp)} °C`, broken };

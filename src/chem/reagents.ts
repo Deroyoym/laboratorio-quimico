@@ -1,4 +1,4 @@
-import type { RGB } from './species';
+import type { PieceKind, RGB } from './species';
 
 /**
  * Reactivos de la estantería.
@@ -20,8 +20,8 @@ export interface ReagentDef {
   doseLabel?: string;
   /** Color con el que se ve dentro del envase */
   color: RGB;
-  /** Especie sólida que contiene (para dibujar el contenido del pote) */
-  piece?: 'granalla' | 'cinta' | 'viruta';
+  /** Cómo se dibujan los trozos del sólido (en el pote y al caer) */
+  piece?: PieceKind;
 }
 
 const perMl = (molPerL: Record<string, number>): Record<string, number> =>
@@ -199,6 +199,98 @@ const list: ReagentDef[] = [
     doseLabel: '0,5 g',
     color: [190, 104, 58],
     piece: 'viruta',
+  },
+  {
+    id: 'hcl6',
+    name: 'Ácido clorhídrico',
+    caption: ['Ácido', 'clorhídrico'],
+    formula: 'HCl',
+    conc: '6 M',
+    kind: 'liquid',
+    contents: perMl({ H: 6, Cl: 6 }),
+    color: CLEAR,
+  },
+  {
+    id: 'naoh6',
+    name: 'Hidróxido de sodio',
+    caption: ['Hidróxido', 'de sodio'],
+    formula: 'NaOH',
+    conc: '6 M',
+    kind: 'liquid',
+    contents: perMl({ Na: 6, OH: 6 }),
+    color: CLEAR,
+  },
+  {
+    id: 'agno3_05',
+    name: 'Nitrato de plata',
+    caption: ['Nitrato', 'de plata'],
+    formula: 'AgNO₃',
+    conc: '0,5 M',
+    kind: 'liquid',
+    contents: perMl({ Ag: 0.5, NO3: 0.5 }),
+    color: CLEAR,
+  },
+  {
+    id: 'cu5',
+    name: 'Alambre de cobre',
+    caption: ['Cobre', '(alambre)'],
+    formula: 'Cu',
+    conc: '0,318 g',
+    kind: 'solid',
+    // 0,318 g ÷ 63,55 g/mol = 5,00 mmol
+    contents: { CuM: 0.005 },
+    doseLabel: '0,318 g (5 mmol)',
+    color: [190, 104, 58],
+    piece: 'viruta',
+  },
+  {
+    id: 'nh4no3',
+    name: 'Nitrato de amonio',
+    caption: ['Nitrato', 'de amonio'],
+    formula: 'NH₄NO₃',
+    conc: '5 g',
+    kind: 'solid',
+    contents: { NH4NO3_s: 5 / 80.04 },
+    doseLabel: '5 g',
+    color: [244, 246, 250],
+    piece: 'cristal',
+  },
+  {
+    id: 'cacl2',
+    name: 'Cloruro de calcio',
+    caption: ['Cloruro', 'de calcio'],
+    formula: 'CaCl₂',
+    conc: '5 g',
+    kind: 'solid',
+    contents: { CaCl2_s: 5 / 110.98 },
+    doseLabel: '5 g',
+    color: [232, 234, 238],
+    piece: 'cristal',
+  },
+  {
+    id: 'sal',
+    name: 'Sal de mesa',
+    caption: ['Sal', 'de mesa'],
+    formula: 'NaCl',
+    conc: '5 g',
+    kind: 'solid',
+    contents: { NaCl_s: 5 / 58.44 },
+    doseLabel: '5 g',
+    color: [250, 250, 252],
+    piece: 'cristal',
+  },
+  {
+    // Solo como contenido inicial de un recipiente
+    id: 'cuo',
+    name: 'Óxido de cobre(II)',
+    caption: ['Óxido', 'de cobre'],
+    formula: 'CuO',
+    conc: '0,80 g',
+    kind: 'solid',
+    contents: { CuO: 0.01 },
+    doseLabel: '0,80 g (10 mmol)',
+    color: [30, 27, 26],
+    piece: 'polvo',
   },
 ];
 

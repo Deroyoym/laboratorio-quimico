@@ -1,4 +1,5 @@
 import './style.css';
+import { Sound } from './audio/sound';
 import { MOLAR_GAS_ML, VESSEL_NAMES, pH } from './chem/engine';
 import { SPECIES } from './chem/species';
 import { Game } from './game/game';
@@ -14,6 +15,11 @@ const ICON = {
   flame:
     '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c1 4 5 6 5 11a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5.3 1.6 1 2.5 2 3C10.500 8 11 5 12 2z"/></svg>',
   sink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14l-1.5 12a2 2 0 0 1-2 1.800h-7a2 2 0 0 1-2-1.800z"/><path d="M9 7V4h6v3"/></svg>',
+  bulb: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-3.6 10.800c.7.600 1.100 1.400 1.100 2.200h5c0-.800.400-1.600 1.100-2.200A6 6 0 0 0 12 3z"/></svg>',
+  soundOn:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.500v5h3.500l4.500 4v-13l-4.500 4H4z"/><path d="M16 9a4.500 4.500 0 0 1 0 6"/><path d="M18.800 6.500a8 8 0 0 1 0 11"/></svg>',
+  soundOff:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.500v5h3.500l4.500 4v-13l-4.500 4H4z"/><path d="M16.500 9.500l5 5M21.500 9.500l-5 5"/></svg>',
   logo: '<svg viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#12303a"/><path d="M22.500 38h19l7 12a4 4 0 0 1-3.500 6H19a4 4 0 0 1-3.500-6z" fill="#3fd0b6"/><circle cx="29" cy="46" r="2.400" fill="#e8fffa"/><circle cx="37" cy="50" r="1.600" fill="#e8fffa"/><circle cx="34" cy="41" r="1.200" fill="#e8fffa"/><path d="M26 10h12v3h-2v14l13 22a5 5 0 0 1-4.300 7.500H19.300A5 5 0 0 1 15 49l13-22V13h-2z" fill="none" stroke="#e8f4f8" stroke-width="2.400" stroke-linejoin="round"/></svg>',
 };
 
@@ -31,7 +37,10 @@ app.innerHTML = `
     <div id="levels" class="levels"></div>
     <div class="menu-foot">
       <span id="total-stars"></span>
-      <button id="btn-clear" class="link-btn">Borrar progreso</button>
+      <span>
+        <button id="btn-sound-menu" class="link-btn"></button>
+        <button id="btn-clear" class="link-btn">Borrar progreso</button>
+      </span>
     </div>
   </section>
 
@@ -40,7 +49,8 @@ app.innerHTML = `
       <div class="hud-row">
         <button id="btn-menu" class="icon-btn" aria-label="Volver a los niveles">${ICON.back}</button>
         <div class="hud-title"><small id="lvl-num"></small><strong id="lvl-name"></strong></div>
-        <button id="btn-hint" class="icon-btn">Pista</button>
+        <button id="btn-hint" class="icon-btn" aria-label="Pista">${ICON.bulb}</button>
+        <button id="btn-sound" class="icon-btn"></button>
         <button id="btn-reset" class="icon-btn" aria-label="Reiniciar el nivel">${ICON.reset}</button>
       </div>
       <ul id="goals" class="goals"></ul>
@@ -76,6 +86,7 @@ const dosesEl = $('doses');
 const toastsEl = $('toasts');
 const burnerBtn = $('btn-burner');
 
+const sound = new Sound();
 let progress: Progress = loadProgress();
 let levelIndex = 0;
 let game: Game | null = null;
@@ -183,6 +194,7 @@ function startLevel(i: number): void {
   const level = LEVELS[i];
   game = new Game(level, {
     toast,
+    sfx: (name) => sound.play(name),
     changed: () => (uiDirty = true),
     won: onWin,
   });
@@ -229,10 +241,74 @@ function onWin(stars: number): void {
         `<div class="big-stars">${starsHtml(stars)}</div>` +
         `<p class="meta">Lo resolviste en ${g.actions} ${g.actions === 1 ? 'acción' : 'acciones'} · 3 estrellas con ${level.par} o menos</p>` +
         `<div class="kicker">¿Qué pasó?</div>${level.explain}` +
-        (last ? '<p><b>Completaste los cinco niveles.</b> Pronto habrá más experimentos.</p>' : ''),
+        (last ? `<p><b>Completaste los ${LEVELS.length} niveles.</b> Pronto habrá más experimentos.</p>` : ''),
       buttons,
     );
   }, 900);
+}
+
+// --- Sonido -----------------------------------------------------------------
+
+function renderSoundButtons(): void {
+  const hud = $('btn-sound');
+  hud.innerHTML = sound.enabled ? ICON.soundOn : ICON.soundOff;
+  hud.setAttribute('aria-label', sound.enabled ? 'Silenciar' : 'Activar el sonido');
+  hud.setAttribute('aria-pressed', String(sound.enabled));
+  $('btn-sound-menu').textContent = sound.enabled ? 'Sonido: sí' : 'Sonido: no';
+}
+
+function toggleSound(): void {
+  sound.setEnabled(!sound.enabled);
+  renderSoundButtons();
+  sound.play('select');
+}
+$('btn-sound').addEventListener('click', toggleSound);
+$('btn-sound-menu').addEventListener('click', toggleSound);
+renderSoundButtons();
+
+// El audio solo puede arrancar después de un gesto; cada toque lo reanuda
+for (const type of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(type, () => sound.unlock(), { capture: true });
+}
+document.addEventListener('click', (e) => {
+  const target = e.target as Element | null;
+  if (target?.closest('button') && !target.closest('#btn-sound, #btn-sound-menu')) sound.play('tap');
+});
+
+let lastPhase = 'none';
+
+/** Ambiente (chorro, burbujeo, hervor, mechero) y sonidos del vertido. */
+function soundFrame(dt: number, running: boolean): void {
+  const g = game;
+  if (!g || !running) {
+    sound.silence();
+    lastPhase = 'none';
+    return;
+  }
+  const p = g.pour;
+  const r = p ? g.reagents[p.reagent] : null;
+  const phase = p ? p.phase : 'none';
+  if (phase !== lastPhase) {
+    if (phase === 'pour' && r?.kind === 'dropper') sound.play('drop');
+    if (phase === 'pour' && r?.kind === 'solid') sound.play('solid');
+    if (phase === 'none' && lastPhase === 'back') sound.play('clink');
+    lastPhase = phase;
+  }
+  let gas = 0;
+  let boil = 0;
+  let burner = 0;
+  for (const v of g.vessels) {
+    gas = Math.max(gas, v.gasRate);
+    if (v.boiling) boil = 1;
+    if (v.heating) burner = 1;
+  }
+  sound.ambience({
+    pour: phase === 'pour' && r?.kind === 'liquid' ? 1 : 0,
+    fizz: Math.min(1, gas * 700),
+    boil,
+    burner,
+  });
+  sound.update(dt);
 }
 
 $('btn-menu').addEventListener('click', showMenu);
@@ -398,9 +474,12 @@ let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (game && scene && !playEl.classList.contains('hidden')) {
-    // Con un cartel abierto la química queda en pausa
-    if (modalEl.classList.contains('hidden') || game.won) {
+  const playing = !!game && !!scene && !playEl.classList.contains('hidden');
+  // Con un cartel abierto la química queda en pausa
+  const running = playing && (modalEl.classList.contains('hidden') || game!.won);
+  soundFrame(dt, running);
+  if (game && scene && playing) {
+    if (running) {
       game.update(dt);
       scene.update(dt);
     }
@@ -420,7 +499,7 @@ showMenu();
 // Acceso para pruebas automáticas y para curiosear desde la consola
 declare global {
   interface Window {
-    lab?: { game: () => Game | null; start: (i: number) => void };
+    lab?: { game: () => Game | null; start: (i: number) => void; sound: Sound };
   }
 }
-window.lab = { game: () => game, start: startLevel };
+window.lab = { game: () => game, start: startLevel, sound };

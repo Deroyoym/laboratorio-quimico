@@ -8,6 +8,10 @@ export interface VesselSpec {
   x: number;
   /** Contenido inicial: [reactivo, mL o dosis] */
   initial?: [string, number][];
+  /** Recipiente de referencia: está tapado, no se le agrega ni se vacía */
+  locked?: boolean;
+  /** Cartelito que lo identifica en la mesada */
+  tag?: string;
 }
 
 export interface LevelDef {
@@ -173,5 +177,146 @@ export const LEVELS: LevelDef[] = [
       '<p class="eq">CuSO₄ + 2 NaOH → Cu(OH)₂↓ + Na₂SO₄</p>' +
       '<p class="eq">Cu(OH)₂ —calor→ CuO + H₂O</p>' +
       '<p>El hidróxido de cobre es un precipitado celeste gelatinoso. Al calentarlo cerca de 80 °C <b>se deshidrata</b> y queda óxido de cobre(II), negro. Con las cantidades justas, todo el cobre termina en el sólido y en el líquido solo queda sulfato de sodio disuelto.</p>',
+  },
+  {
+    id: 'dilucion',
+    title: 'Dilución a medida',
+    tag: 'Concentración · color',
+    brief:
+      'El tubo tapado es un patrón de CuSO₄ 0,20 M. Prepará en el vaso al menos 50 mL de solución del mismo color, usando la solución concentrada 0,5 M y agua.',
+    reagents: ['cuso4', 'agua'],
+    vessels: [
+      { kind: 'vaso', capacity: 100, x: 0.4 },
+      {
+        kind: 'tubo',
+        capacity: 20,
+        x: 0.84,
+        locked: true,
+        tag: 'Patrón',
+        initial: [
+          ['cuso4', 6],
+          ['agua', 9],
+        ],
+      },
+    ],
+    tools: {},
+    doses: [1, 5, 10, 25],
+    goals: [
+      { kind: 'concRange', sp: 'Cu', min: 0.19, max: 0.21, label: 'Mismo color que el patrón' },
+      { kind: 'volMin', min: 50, label: 'Al menos 50 mL de solución' },
+    ],
+    par: 4,
+    hints: [
+      'Al agregar agua los moles de soluto no cambian, solo se reparten en más volumen: C₁ · V₁ = C₂ · V₂.',
+      'Para 50 mL de solución 0,20 M hacen falta 0,20 M × 50 mL = 10 mmol de CuSO₄. ¿En cuántos mL de la solución 0,5 M están?',
+      '20 mL de CuSO₄ 0,5 M y 30 mL de agua.',
+    ],
+    explain:
+      '<p class="eq">C₁ · V₁ = C₂ · V₂ → 0,5 M · 20 mL = 0,20 M · 50 mL</p>' +
+      '<p>Diluir no cambia la cantidad de soluto, solo el volumen en el que está repartido. Por eso la solución se ve más clara: la luz atraviesa menos iones Cu²⁺ en el mismo espesor (ley de <b>Beer–Lambert</b>).</p>' +
+      '<p>Comparar el color con un patrón de concentración conocida es la base de la colorimetría.</p>',
+  },
+  {
+    id: 'frio',
+    title: 'Frío instantáneo',
+    tag: 'Calor de disolución',
+    brief:
+      'Disolver una sal puede calentar o enfriar el agua. Encontrá la que sirve para una compresa fría y bajá la temperatura a 8 °C o menos, con al menos 25 mL de solución.',
+    reagents: ['agua', 'nh4no3', 'cacl2', 'sal'],
+    vessels: [{ kind: 'vaso', capacity: 100, x: 0.5 }],
+    tools: {},
+    doses: [5, 10, 25],
+    goals: [
+      { kind: 'tempMax', max: 8, label: 'Enfriar a 8 °C o menos' },
+      { kind: 'volMin', min: 25, label: 'Al menos 25 mL de solución' },
+    ],
+    par: 3,
+    hints: [
+      'Probá cada sal con un poco de agua y mirá el termómetro: una calienta, otra casi no cambia y otra enfría.',
+      'El nitrato de amonio absorbe calor al disolverse. Cuanta más sal en menos agua, más baja la temperatura.',
+      '25 mL de agua y dos cucharadas de nitrato de amonio.',
+    ],
+    explain:
+      '<p class="eq">NH₄NO₃(s) → NH₄⁺ + NO₃⁻ &nbsp; ΔH ≈ +26 kJ/mol</p>' +
+      '<p>Para separar los iones del cristal hace falta energía, y al rodearse de agua la devuelven. En el nitrato de amonio gana lo primero: la disolución es <b>endotérmica</b> y le saca calor al agua. Así funcionan las compresas frías instantáneas.</p>' +
+      '<p>El cloruro de calcio hace lo contrario (−83 kJ/mol, calienta) y la sal de mesa casi no cambia la temperatura.</p>',
+  },
+  {
+    id: 'arbol-de-plata',
+    title: 'Árbol de plata',
+    tag: 'Desplazamiento · estequiometría',
+    brief:
+      'El cobre es más reactivo que la plata y la saca de la solución. Obtené al menos 1 g de plata metálica pura: sin cobre sin reaccionar y sin plata disuelta de sobra.',
+    reagents: ['agno3_05', 'cu5', 'nacl', 'agua'],
+    vessels: [{ kind: 'vaso', capacity: 50, x: 0.5 }],
+    tools: {},
+    doses: [1, 5, 10, 25],
+    goals: [
+      { kind: 'solidMin', sp: 'AgM', grams: 1, label: 'Plata metálica ≥ 1,0 g' },
+      { kind: 'onlySolid', sp: 'AgM', label: 'Plata sola: sin cobre ni otros sólidos' },
+      { kind: 'aqMax', sp: 'Ag', conc: 1e-3, label: 'Sin plata disuelta de sobra' },
+    ],
+    par: 3,
+    hints: [
+      'Poné el alambre de cobre en nitrato de plata y mirá: crece plata sobre el cobre y el líquido se pone celeste.',
+      'Cu + 2 Ag⁺ → Cu²⁺ + 2 Ag: cada mol de cobre necesita dos moles de plata. El alambre tiene 5 mmol de cobre.',
+      'Un alambre de cobre (5 mmol) y 20 mL de AgNO₃ 0,5 M (10 mmol). El cloruro de sodio arruina todo: precipita AgCl.',
+    ],
+    explain:
+      '<p class="eq">Cu(s) + 2 AgNO₃ → Cu(NO₃)₂ + 2 Ag(s)</p>' +
+      '<p>Es una reacción de <b>desplazamiento</b>: el cobre cede electrones más fácilmente que la plata, se disuelve como Cu²⁺ (por eso el líquido se vuelve celeste) y los iones Ag⁺ se depositan como metal.</p>' +
+      '<p>Con las cantidades justas, 1 mol de cobre por cada 2 de plata, no sobra ninguno de los dos: ninguno es el reactivo en exceso.</p>',
+  },
+  {
+    id: 'sal',
+    title: 'Sal de laboratorio',
+    tag: 'Neutralización · cristalización',
+    brief:
+      'La sal de mesa se puede fabricar con un ácido y una base. Neutralizá con cuidado (son soluciones concentradas) y después evaporá el agua con el mechero hasta que aparezcan los cristales.',
+    reagents: ['hcl6', 'naoh6', 'agua'],
+    vessels: [{ kind: 'vaso', capacity: 30, x: 0.5 }],
+    tools: { burner: true, phMeter: true },
+    doses: [1, 5, 10],
+    goals: [
+      { kind: 'solidMin', sp: 'NaCl_s', grams: 0.5, label: 'Cristales de sal ≥ 0,5 g' },
+      { kind: 'ph', min: 6, max: 8, label: 'Líquido neutro (pH 6 – 8)' },
+    ],
+    par: 3,
+    hints: [
+      'Primero formá la sal disuelta: ácido y base en cantidades iguales de moles. Fijate cuánto sube la temperatura.',
+      'La sal no aparece porque está disuelta. Al hervir se va el agua y la solución se concentra hasta saturarse.',
+      '5 mL de HCl 6 M y 5 mL de NaOH 6 M. Después dejá el mechero prendido hasta que queden pocos mL.',
+    ],
+    explain:
+      '<p class="eq">HCl + NaOH → NaCl + H₂O</p>' +
+      '<p>Después de neutralizar, en el vaso solo hay iones Na⁺ y Cl⁻ en agua. Al evaporar, el agua se va pero los iones no: la solución se concentra hasta la <b>saturación</b> (unos 360 g de sal por litro) y el exceso cristaliza.</p>' +
+      '<p>Con soluciones 6 M la neutralización libera tanto calor que la mezcla se calienta casi 30 °C sola.</p>',
+  },
+  {
+    id: 'ciclo-del-cobre',
+    title: 'El ciclo del cobre',
+    tag: 'Desafío final',
+    brief:
+      'En el vaso hay 0,80 g de óxido de cobre(II), el polvo negro del nivel 5. Recuperá el cobre como metal: tiene que quedar solo cobre en el fondo y el líquido incoloro.',
+    reagents: ['hcl2', 'zn', 'mg', 'agua'],
+    vessels: [{ kind: 'vaso', capacity: 50, x: 0.5, initial: [['cuo', 1]] }],
+    tools: {},
+    doses: [1, 5, 10, 25],
+    goals: [
+      { kind: 'solidMin', sp: 'CuS', grams: 0.6, label: 'Cobre metálico ≥ 0,60 g' },
+      { kind: 'onlySolid', sp: 'CuS', label: 'Cobre solo: sin óxido ni otro metal' },
+      { kind: 'aqMax', sp: 'Cu', conc: 1e-3, label: 'Líquido incoloro (sin Cu²⁺)' },
+    ],
+    par: 4,
+    hints: [
+      'Primero hay que pasar el cobre a la solución: los óxidos metálicos se disuelven en ácido.',
+      'Un metal más reactivo saca al cobre de la solución… pero también reacciona con el ácido que sobre. Si queda metal de más, el ácido lo disuelve y al cobre no lo toca.',
+      '10 mL de HCl 2 M, dos cucharadas de zinc (con una no alcanza para 10 mmol de cobre) y, cuando el líquido quede incoloro, otros 10 mL de HCl para disolver el zinc que sobró.',
+    ],
+    explain:
+      '<p class="eq">CuO + 2 HCl → CuCl₂ + H₂O</p>' +
+      '<p class="eq">CuCl₂ + Zn → ZnCl₂ + Cu(s)</p>' +
+      '<p class="eq">Zn + 2 HCl → ZnCl₂ + H₂↑</p>' +
+      '<p>El cobre pasó por tres formas sin perderse: óxido negro, ion celeste en solución y metal rojizo. El zinc lo <b>desplaza</b> porque es más reactivo; el ácido se lleva el zinc sobrante, pero no puede con el cobre, que está por debajo del hidrógeno en la serie de actividad.</p>',
   },
 ];

@@ -6,7 +6,8 @@ reacciones se ven: cambia el color, burbujea el gas, cae el precipitado y sube
 o baja la temperatura. Cada nivel pide lograr algo concreto.
 
 Vite + TypeScript + Canvas, sin backend. El progreso se guarda en
-`localStorage`.
+`localStorage`. El sonido está sintetizado con Web Audio: no hay archivos de
+audio.
 
 ## Cómo correrlo
 
@@ -20,6 +21,12 @@ npm run build    # typecheck + build de producción en dist/
 Para probarlo desde el teléfono en la misma red: `npm run dev -- --host` y
 abrir la dirección que muestra Vite.
 
+## Deploy
+
+El build es estático: alcanza con servir `dist/`. Para Vercel, `vercel.json`
+fija el preset de Vite, el comando de build y la carpeta de salida, así no
+depende de lo que haya detectado el proyecto al importarlo.
+
 ## Cómo se juega
 
 - Tocá un envase de la estantería y después un recipiente para verter una
@@ -29,6 +36,7 @@ abrir la dirección que muestra Vite.
   reinicia el nivel; «Pista» da ayudas de a una.
 - Se gana cuando un mismo recipiente cumple todos los objetivos. Las estrellas
   dependen de la cantidad de acciones.
+- El parlante de arriba silencia el juego; la elección queda guardada.
 
 ## Niveles
 
@@ -39,6 +47,11 @@ abrir la dirección que muestra Vite.
 | 3 | Lluvia de oro | Precipitación de PbI₂ y pureza del sólido |
 | 4 | Hidrógeno bajo control | Metal + ácido, gas y control de temperatura |
 | 5 | Del celeste al negro | Cu(OH)₂ → CuO con el mechero |
+| 6 | Dilución a medida | C₁V₁ = C₂V₂, igualar el color de un patrón |
+| 7 | Frío instantáneo | Calor de disolución (endotérmica y exotérmica) |
+| 8 | Árbol de plata | Desplazamiento Cu + Ag⁺ en proporción exacta |
+| 9 | Sal de laboratorio | Neutralización, evaporación y cristalización |
+| 10 | El ciclo del cobre | Óxido → ion → metal, y limpieza con ácido |
 
 ## Cómo está armado
 
@@ -56,6 +69,8 @@ src/
   render/
     glass.ts      geometría del material de vidrio
     scene.ts      dibujo en canvas y partículas
+  audio/
+    sound.ts      efectos y ambiente sintetizados con Web Audio
   main.ts         menú, HUD y entrada táctil
 tests/            soluciones de cada nivel jugadas contra el motor
 ```
@@ -69,8 +84,12 @@ Cada recipiente guarda moles por especie, volumen y temperatura. En cada paso:
 2. **Precipitación por Kps**: para cada sal poco soluble se resuelve el
    equilibrio, así que el sólido aparece al superar el producto de solubilidad
    y se redisuelve al diluir o al acidificar.
+   Las sales muy solubles (NaCl, NH₄NO₃, CaCl₂) usan el mismo mecanismo con
+   su calor de disolución, así que enfrían o calientan al disolverse y
+   cristalizan cuando el agua se evapora.
 3. **Reacciones con velocidad**: metal + ácido (según superficie, [H⁺] y
-   temperatura), deshidratación del Cu(OH)₂ en caliente.
+   temperatura), desplazamiento entre metales (Cu + Ag⁺, Zn + Cu²⁺),
+   deshidratación del Cu(OH)₂ en caliente.
 4. **Calor**: entalpías de reacción, mechero, enfriamiento hacia el ambiente y
    ebullición con evaporación.
 
@@ -80,8 +99,10 @@ el pH.
 
 Los datos (Kps, ΔH, masas molares) son reales. Lo que está simplificado: la
 escala de tiempo está comprimida para que todo pase en segundos, los volúmenes
-se suman sin corrección y cada nivel ofrece solo reactivos cuyas combinaciones
-están modeladas.
+se suman sin corrección, las sales muy solubles se tratan como ideales y cada
+nivel ofrece solo reactivos cuyas combinaciones están modeladas. Cuando dos
+reactivos están en proporción exacta, el final de la reacción se acelera para
+que no se arrastre indefinidamente.
 
 ### Agregar un nivel
 
