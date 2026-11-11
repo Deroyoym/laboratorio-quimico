@@ -20,6 +20,12 @@ npm run build    # typecheck + build de producción en dist/
 Para probarlo desde el teléfono en la misma red: `npm run dev -- --host` y
 abrir la dirección que muestra Vite.
 
+## Deploy
+
+El build es estático: alcanza con servir `dist/`. Para Vercel, `vercel.json`
+fija el preset de Vite, el comando de build y la carpeta de salida, así no
+depende de lo que haya detectado el proyecto al importarlo.
+
 ## Cómo se juega
 
 - Tocá un envase de la estantería y después un recipiente para verter una
