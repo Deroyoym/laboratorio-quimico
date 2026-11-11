@@ -35,8 +35,12 @@ export interface Pour {
 export const GO_TIME = 0.34;
 export const BACK_TIME = 0.3;
 
+/** Efectos de sonido puntuales que dispara la partida */
+export type Sfx = 'select' | 'empty' | 'burnerOn' | 'burnerOff' | 'observe' | 'warn' | 'win';
+
 export interface GameHooks {
   toast(text: string, tone?: 'info' | 'warn'): void;
+  sfx?(name: Sfx): void;
   /** Cambió algo que muestra la interfaz (selección, dosis, mechero…) */
   changed(): void;
   won(stars: number): void;
@@ -66,6 +70,21 @@ export class Game {
     this.setup();
   }
 
+  /** Los recipientes de referencia no se tocan. */
+  isLocked(i: number): boolean {
+    return !!this.level.vessels[i].locked;
+  }
+
+  private firstOpen(): number {
+    return Math.max(0, this.level.vessels.findIndex((v) => !v.locked));
+  }
+
+  /** Aviso al jugador con su sonido. */
+  private say(text: string, tone: 'info' | 'warn' = 'info'): void {
+    this.hooks.toast(text, tone);
+    this.hooks.sfx?.(tone === 'warn' ? 'warn' : 'observe');
+  }
+
   private setup(): void {
     this.vessels = this.level.vessels.map((spec) => {
       const v = createVessel(spec.kind, spec.capacity);
@@ -74,12 +93,12 @@ export class Game {
       step(v, 1e-3);
       return v;
     });
+    this.selVessel = this.firstOpen();
   }
 
   reset(): void {
     this.setup();
     this.selReagent = null;
-    this.selVessel = 0;
     this.pour = null;
     this.queue = [];
     this.actions = 0;
@@ -98,6 +117,7 @@ export class Game {
 
   selectReagent(i: number | null): void {
     if (this.won) return;
+    if (i !== null && i !== this.selReagent) this.hooks.sfx?.('select');
     this.selReagent = i;
     this.hooks.changed();
   }
@@ -108,6 +128,10 @@ export class Game {
 
   tapVessel(i: number): void {
     if (this.won) return;
+    if (this.isLocked(i)) {
+      this.say('El patrón es solo para comparar: está tapado.', 'warn');
+      return;
+    }
     this.selVessel = i;
     if (this.selReagent !== null) this.requestPour(this.selReagent, i, null);
     this.hooks.changed();
@@ -116,6 +140,10 @@ export class Game {
   /** Pide verter una dosis del reactivo en el recipiente. */
   requestPour(reagent: number, vessel: number, from: Point | null): void {
     if (this.won) return;
+    if (this.isLocked(vessel)) {
+      this.say('El patrón es solo para comparar: está tapado.', 'warn');
+      return;
+    }
     this.selVessel = vessel;
     if (this.queue.length < 3) this.queue.push({ reagent, vessel, from });
     this.hooks.changed();
@@ -136,7 +164,7 @@ export class Game {
       total = this.dose;
       dur = 0.45 + 0.035 * total;
       if (v.vol >= v.capacity - 1e-6) {
-        this.hooks.toast('El recipiente está lleno. Vacialo para seguir.', 'warn');
+        this.say('El recipiente está lleno. Vacialo para seguir.', 'warn');
         return;
       }
     }
@@ -153,6 +181,7 @@ export class Game {
     if (!hadStuff) return;
     emptyVessel(v);
     this.actions++;
+    this.hooks.sfx?.('empty');
     this.hooks.toast('Recipiente vaciado y enjuagado.');
     this.hooks.changed();
   }
@@ -161,10 +190,11 @@ export class Game {
     if (this.won || !this.level.tools.burner) return;
     const v = this.vessels[this.selVessel];
     if (!v.heating && v.vol < 5) {
-      this.hooks.toast('Poné al menos 5 mL de líquido antes de encender el mechero.', 'warn');
+      this.say('Poné al menos 5 mL de líquido antes de encender el mechero.', 'warn');
       return;
     }
     v.heating = !v.heating;
+    this.hooks.sfx?.(v.heating ? 'burnerOn' : 'burnerOff');
     this.hooks.changed();
   }
 
@@ -185,7 +215,7 @@ export class Game {
       for (let i = 0; i < sub; i++) step(v, dt / sub, events);
       if (v.heating && v.vol < 3) {
         v.heating = false;
-        this.hooks.toast('¡Casi se seca! Apagué el mechero.', 'warn');
+        this.say('¡Casi se seca! Apagué el mechero.', 'warn');
         this.hooks.changed();
       }
     }
@@ -196,7 +226,7 @@ export class Game {
       const res = this.results();
       const broken = res.conds.some((c) => c.broken);
       if (broken && !this.brokenWarned) {
-        this.hooks.toast('Se rompió una condición del objetivo: vaciá el recipiente y probá de nuevo.', 'warn');
+        this.say('Se rompió una condición del objetivo: vaciá el recipiente y probá de nuevo.', 'warn');
       }
       this.brokenWarned = broken;
       const allOk = res.conds.every((c) => c.ok);
@@ -207,6 +237,7 @@ export class Game {
           this.selReagent = null;
           for (const v of this.vessels) v.heating = false;
           this.hooks.changed();
+          this.hooks.sfx?.('win');
           this.hooks.won(this.stars());
         }
       } else {
@@ -244,15 +275,15 @@ export class Game {
       case 'solid':
       case 'gas': {
         const obs = SPECIES[e.sp].obs;
-        if (obs) this.hooks.toast(obs);
+        if (obs) this.say(obs);
         break;
       }
       case 'overflow':
         this.queue = [];
-        this.hooks.toast('¡Se rebalsó! El recipiente está lleno.', 'warn');
+        this.say('¡Se rebalsó! El recipiente está lleno.', 'warn');
         break;
       case 'boil':
-        this.hooks.toast('¡Está hirviendo! El agua se evapora.', 'warn');
+        this.say('¡Está hirviendo! El agua se evapora.', 'warn');
         break;
     }
   }
@@ -266,6 +297,7 @@ export class Game {
     let bestConds: CondResult[] = [];
     let bestScore = -1;
     this.vessels.forEach((v, i) => {
+      if (this.isLocked(i)) return;
       const conds = evalAll(this.level.goals, v, showPh);
       const score = conds.filter((c) => c.ok).length + (i === this.selVessel ? 0.5 : 0);
       if (score > bestScore) {

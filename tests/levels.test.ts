@@ -122,6 +122,95 @@ describe('motor químico', () => {
   });
 });
 
+describe('motor químico: sales, cristales y metales', () => {
+  const settle = (v: ReturnType<typeof createVessel>, seconds: number) => {
+    for (let i = 0; i < seconds / DT; i++) step(v, DT);
+  };
+
+  it('el nitrato de amonio enfría al disolverse y el cloruro de calcio calienta', () => {
+    const cold = createVessel('vaso', 100);
+    addReagent(cold, REAGENTS.agua, 25);
+    addReagent(cold, REAGENTS.nh4no3, 2);
+    settle(cold, 4);
+    expect(cold.n.NH4NO3_s).toBe(0);
+    expect(cold.temp).toBeLessThan(4);
+    expect(cold.temp).toBeGreaterThan(-3);
+
+    const hot = createVessel('vaso', 100);
+    addReagent(hot, REAGENTS.agua, 25);
+    addReagent(hot, REAGENTS.cacl2, 1);
+    settle(hot, 4);
+    expect(hot.temp).toBeGreaterThan(48);
+  });
+
+  it('la sal de mesa satura cerca de 6,1 M y el resto queda sin disolver', () => {
+    const v = createVessel('vaso', 100);
+    addReagent(v, REAGENTS.agua, 25);
+    addReagent(v, REAGENTS.sal, 2);
+    settle(v, 8);
+    expect(v.n.Na / 0.025).toBeCloseTo(6.13, 1);
+    expect(solidGrams(v, 'NaCl_s')).toBeGreaterThan(0.8);
+    // Con más agua termina de disolverse
+    addReagent(v, REAGENTS.agua, 25);
+    settle(v, 8);
+    expect(solidGrams(v, 'NaCl_s')).toBe(0);
+  });
+
+  it('al evaporar una salmuera cristaliza la sal', () => {
+    const v = createVessel('vaso', 30);
+    addReagent(v, REAGENTS.hcl6, 5);
+    addReagent(v, REAGENTS.naoh6, 5);
+    settle(v, 1);
+    expect(v.temp).toBeGreaterThan(45);
+    expect(solidGrams(v, 'NaCl_s')).toBe(0);
+    v.heating = true;
+    for (let i = 0; i < 60 / DT && v.vol > 3; i++) step(v, DT);
+    v.heating = false;
+    settle(v, 3);
+    expect(v.vol).toBeLessThan(3.1);
+    expect(solidGrams(v, 'NaCl_s')).toBeGreaterThan(0.6);
+    expect(pH(v)!).toBeCloseTo(7, 1);
+  });
+
+  it('el cobre desplaza a la plata en proporción 1 : 2 y la reacción termina', () => {
+    const v = createVessel('vaso', 50);
+    addReagent(v, REAGENTS.agno3_05, 20);
+    addReagent(v, REAGENTS.cu5, 1);
+    settle(v, 25);
+    expect(v.n.CuM).toBe(0);
+    expect(v.n.Ag).toBeLessThan(1e-9);
+    expect(v.n.AgM).toBeCloseTo(0.01, 6);
+    expect(v.n.Cu).toBeCloseTo(0.005, 6);
+    // El líquido quedó celeste por el Cu²⁺
+    const rgb = liquidLook(v).rgb;
+    expect(rgb[2] - rgb[0]).toBeGreaterThan(60);
+  });
+
+  it('el ácido disuelve el zinc sobrante pero no toca al cobre depositado', () => {
+    const v = createVessel('vaso', 50);
+    addReagent(v, REAGENTS.cuso4, 10);
+    addReagent(v, REAGENTS.zn, 1);
+    settle(v, 20);
+    expect(v.n.Cu).toBeLessThan(1e-9);
+    expect(v.n.CuS).toBeCloseTo(0.005, 6);
+    expect(v.n.Zn).toBeGreaterThan(0.002);
+    addReagent(v, REAGENTS.hcl2, 10);
+    settle(v, 30);
+    expect(v.n.Zn).toBe(0);
+    expect(v.n.CuS).toBeCloseTo(0.005, 6);
+    expect(v.gasOut.H2).toBeGreaterThan(0.002);
+  });
+
+  it('el óxido de cobre no se revierte solo en una solución de cobre', () => {
+    const v = createVessel('vaso', 50);
+    addReagent(v, REAGENTS.cuo, 1);
+    addReagent(v, REAGENTS.cuso4, 10);
+    settle(v, 60);
+    expect(v.n.CuO).toBeGreaterThan(0.00999);
+    expect(v.n.CuOH2 ?? 0).toBeLessThan(1e-5);
+  });
+});
+
 describe('niveles: la solución prevista funciona', () => {
   it('1 · Primer viraje', () => {
     const t = play('viraje');
@@ -224,6 +313,150 @@ describe('niveles: la solución prevista funciona', () => {
     expect(t.game.won).toBe(true);
     expect(solidGrams(t.game.vessels[0], 'CuO')).toBeGreaterThan(0.35);
     expect(t.stars()).toBe(3);
+  });
+
+  it('6 · Dilución a medida', () => {
+    const t = play('dilucion');
+    t.pour('cuso4', 10);
+    t.pour('cuso4', 10);
+    t.pour('agua', 25);
+    expect(t.game.won).toBe(false);
+    t.pour('agua', 5);
+    expect(t.game.won).toBe(true);
+    expect(t.stars()).toBe(3);
+  });
+
+  it('6 · el patrón no se puede tocar y una dilución equivocada no gana', () => {
+    const t = play('dilucion');
+    const before = t.game.vessels[1].vol;
+    t.pour('agua', 5, 1);
+    expect(t.game.vessels[1].vol).toBe(before);
+    expect(t.game.actions).toBe(0);
+    t.pour('cuso4', 10);
+    t.pour('agua', 25);
+    t.pour('agua', 25);
+    expect(t.game.won).toBe(false);
+  });
+
+  it('7 · Frío instantáneo', () => {
+    const t = play('frio');
+    t.pour('agua', 25);
+    t.pour('nh4no3', 0);
+    expect(t.game.won).toBe(false);
+    t.pour('nh4no3', 0);
+    expect(t.game.won).toBe(true);
+    expect(t.stars()).toBe(3);
+  });
+
+  it('7 · las otras sales no enfrían lo suficiente', () => {
+    const t = play('frio');
+    t.pour('agua', 25);
+    t.pour('sal', 0);
+    t.pour('sal', 0);
+    t.pour('cacl2', 0);
+    t.run(10);
+    expect(t.game.won).toBe(false);
+  });
+
+  it('8 · Árbol de plata', () => {
+    const t = play('arbol-de-plata');
+    t.pour('cu5', 0);
+    t.pour('agno3_05', 10);
+    t.pour('agno3_05', 10);
+    t.run(30);
+    expect(t.game.won).toBe(true);
+    expect(t.stars()).toBe(3);
+    expect(t.toasts.some((x) => x.includes('plata metálica'))).toBe(true);
+  });
+
+  it('8 · con nitrato de plata de más no gana', () => {
+    const t = play('arbol-de-plata');
+    t.pour('cu5', 0);
+    t.pour('agno3_05', 25);
+    t.run(40);
+    expect(t.game.won).toBe(false);
+    expect(t.game.vessels[0].n.CuM).toBe(0);
+  });
+
+  it('9 · Sal de laboratorio', () => {
+    const t = play('sal');
+    t.pour('hcl6', 5);
+    t.pour('naoh6', 5);
+    expect(t.game.won).toBe(false);
+    t.game.toggleBurner();
+    t.run(45);
+    expect(t.game.won).toBe(true);
+    expect(t.stars()).toBe(3);
+  });
+
+  it('10 · El ciclo del cobre', () => {
+    const t = play('ciclo-del-cobre');
+    t.pour('hcl2', 10);
+    t.run(15);
+    const v = t.game.vessels[0];
+    expect(v.n.CuO).toBe(0);
+    expect(v.n.Cu).toBeCloseTo(0.01, 6);
+    t.pour('zn', 0);
+    t.run(15);
+    // Una cucharada (7,6 mmol) no alcanza para 10 mmol de cobre
+    expect(v.n.Cu).toBeGreaterThan(0.002);
+    t.pour('zn', 0);
+    t.run(15);
+    expect(v.n.Cu).toBeLessThan(1e-9);
+    expect(t.game.won).toBe(false);
+    t.pour('hcl2', 10);
+    t.run(40);
+    expect(t.game.won).toBe(true);
+    expect(v.n.CuS).toBeCloseTo(0.01, 6);
+    expect(t.stars()).toBe(3);
+  });
+
+  it('10 · apurarse gasta zinc en el ácido, pero se puede arreglar', () => {
+    const t = play('ciclo-del-cobre');
+    // Zinc antes de que el óxido termine de disolverse: el ácido se lo come
+    t.pour('hcl2', 10);
+    t.pour('zn', 0);
+    t.pour('zn', 0);
+    t.run(10);
+    t.pour('hcl2', 10);
+    t.run(40);
+    const v = t.game.vessels[0];
+    expect(v.gasOut.H2).toBeGreaterThan(0.001);
+    expect(v.n.CuO).toBe(0);
+    expect(v.n.Zn).toBe(0);
+    expect(v.n.Cu).toBeGreaterThan(1e-5);
+    expect(t.game.won).toBe(false);
+    // Más zinc para el cobre que quedó disuelto y ácido para el zinc sobrante
+    t.pour('zn', 0);
+    t.run(20);
+    t.pour('hcl2', 10);
+    t.run(40);
+    expect(t.game.won).toBe(true);
+    // Seis acciones contra cuatro de la receta ideal: dos estrellas
+    expect(t.stars()).toBe(2);
+  });
+
+  it('10 · también sale con magnesio', () => {
+    const t = play('ciclo-del-cobre');
+    t.pour('hcl2', 10);
+    t.run(15);
+    t.pour('mg', 0);
+    t.pour('mg', 0);
+    t.pour('mg', 0);
+    t.run(15);
+    expect(t.game.won).toBe(false);
+    t.pour('hcl2', 5);
+    t.run(30);
+    expect(t.game.won).toBe(true);
+  });
+
+  it('10 · sin ácido el zinc no hace nada con el óxido', () => {
+    const t = play('ciclo-del-cobre');
+    t.pour('agua', 10);
+    t.pour('zn', 0);
+    t.run(30);
+    expect(t.game.vessels[0].n.CuO).toBeCloseTo(0.01, 9);
+    expect(t.game.won).toBe(false);
   });
 
   it('5 · con base de más el pH queda alto y no gana', () => {

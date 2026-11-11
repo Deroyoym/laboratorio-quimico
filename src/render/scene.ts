@@ -1,6 +1,6 @@
 import { liquidLook, sediment, type Vessel } from '../chem/engine';
 import type { ReagentDef } from '../chem/reagents';
-import { CHUNKS, POWDERS, type RGB } from '../chem/species';
+import { CHUNKS, POWDERS, type PieceKind, type RGB } from '../chem/species';
 import { BACK_TIME, GO_TIME, type Game, type Point, type Pour } from '../game/game';
 import { SHAPES, halfWidth, levelFor, tracePath, type Shape } from './glass';
 
@@ -400,17 +400,21 @@ export class Scene {
     });
 
     this.drawRack();
+    const openVessels = game.vessels.filter((_, i) => !game.isLocked(i)).length;
     game.vessels.forEach((v, i) => {
       const slot = L.vessels[i];
       if (game.level.tools.burner) this.drawBurner(slot, v);
-      if (game.vessels.length > 1 && game.selVessel === i) this.drawSelection(slot);
+      if (openVessels > 1 && game.selVessel === i) this.drawSelection(slot);
       this.drawVessel(slot, v);
+      if (game.isLocked(i)) this.drawStopper(slot, game.level.vessels[i].tag);
     });
 
     // Flechas que invitan a verter
     const dragOver = this.drag ? this.hitVessel(this.drag.x, this.drag.y) : -1;
     if (!game.won && !pour && (game.selReagent !== null || this.drag)) {
-      L.vessels.forEach((slot, i) => this.drawChevron(slot, i === dragOver));
+      L.vessels.forEach((slot, i) => {
+        if (!game.isLocked(i)) this.drawChevron(slot, i === dragOver);
+      });
     }
 
     // Envase en movimiento
@@ -560,6 +564,42 @@ export class Scene {
     ctx.ellipse(slot.cx, L.surfaceY + 2, rx, 6, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
+  }
+
+  /** Tapón y cartel de un recipiente de referencia. */
+  private drawStopper(slot: VesselSlot, tag?: string): void {
+    const { ctx } = this;
+    const s = slot.scale;
+    const mouth = halfWidth(slot.shape, 0.96, s);
+    const y = slot.topY;
+    const cork = ctx.createLinearGradient(slot.cx - mouth, 0, slot.cx + mouth, 0);
+    cork.addColorStop(0, '#9a6d3f');
+    cork.addColorStop(0.45, '#c79a63');
+    cork.addColorStop(1, '#85592f');
+    ctx.fillStyle = cork;
+    ctx.strokeStyle = 'rgba(70,45,20,0.8)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(slot.cx - mouth * 1.12, y - 8 * s);
+    ctx.lineTo(slot.cx + mouth * 1.12, y - 8 * s);
+    ctx.lineTo(slot.cx + mouth * 0.86, y + 7 * s);
+    ctx.lineTo(slot.cx - mouth * 0.86, y + 7 * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    if (!tag) return;
+    const size = clamp(10 * s, 9, 12);
+    ctx.font = `700 ${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    const text = tag.toUpperCase();
+    const tw = ctx.measureText(text).width + 12;
+    const ty = y - 8 * s - size - 12;
+    ctx.fillStyle = 'rgba(18,34,44,0.9)';
+    roundRect(ctx, slot.cx - tw / 2, ty, tw, size + 8, 5);
+    ctx.fill();
+    ctx.fillStyle = '#e9f2f4';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, slot.cx, ty + (size + 8) / 2 + 0.5);
   }
 
   private drawChevron(slot: VesselSlot, strong: boolean): void {
@@ -744,7 +784,8 @@ export class Scene {
     for (const c of this.chunkSpots(v, slot, st)) {
       const x = cx + c.u * halfWidth(shape, c.t, s);
       const y = baseY - c.t * h;
-      drawPiece(ctx, c.sp, x, y, 5.2 * s * c.size, hash(c.k * 9.1 + 3) * Math.PI);
+      const look = CHUNKS.find((d) => d.id === c.sp)!.solid!;
+      drawPiece(ctx, look.piece ?? 'granalla', look.color, x, y, 5.2 * s * c.size, hash(c.k * 9.1 + 3) * Math.PI);
     }
 
     if (lt > 0) {
@@ -809,6 +850,32 @@ export class Scene {
       }
     }
     ctx.restore();
+
+    // Escarcha y condensación cuando el contenido está frío
+    const cold = lt > 0 ? clamp((13 - f.dispTemp) / 9, 0, 1) : 0;
+    if (cold > 0.02) {
+      ctx.save();
+      ctx.beginPath();
+      tracePath(ctx, shape, cx, baseY, s);
+      ctx.closePath();
+      ctx.clip();
+      const top = yL - 10 * s;
+      const frost = ctx.createLinearGradient(0, top, 0, top + 14 * s);
+      frost.addColorStop(0, 'rgba(236,246,255,0)');
+      frost.addColorStop(1, `rgba(236,246,255,${0.42 * cold})`);
+      ctx.fillStyle = frost;
+      ctx.fillRect(cx - maxHW - 2, top, maxHW * 2 + 4, baseY - top + 2);
+      ctx.fillStyle = `rgba(255,255,255,${0.75 * cold})`;
+      const dots = Math.round(maxHW * 0.9);
+      for (let k = 0; k < dots; k++) {
+        const t = hash(k * 4.7 + 2) * (lt + 0.02);
+        const x = cx + (hash(k * 9.3) * 2 - 1) * halfWidth(shape, t, s) * 0.96;
+        ctx.beginPath();
+        ctx.arc(x, baseY - t * h, (0.6 + hash(k * 2.1) * 1.3) * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
 
     // Brillo del vidrio
     ctx.save();
@@ -1025,13 +1092,14 @@ export class Scene {
           ctx.stroke();
         }
       } else {
-        const pieces = r.piece === 'cinta' ? 2 : 6;
+        const kind = r.piece ?? 'granalla';
+        const pieces = kind === 'cinta' ? 2 : kind === 'cristal' ? 12 : 6;
+        const size = (kind === 'cristal' ? 3.2 : 5) * s;
         for (let i = 0; i < pieces; i++) {
           const u = k * 1.9 - i * (0.9 / pieces);
           if (u <= 0 || u >= 1) continue;
           const pt = at(u * u);
-          const sp = Object.keys(r.contents)[0];
-          drawPiece(ctx, sp, pt.x + (hash(i) - 0.5) * 8 * s, pt.y, 5 * s, u * 7 + i);
+          drawPiece(ctx, kind, r.color, pt.x + (hash(i) - 0.5) * 9 * s, pt.y, size, u * 7 + i);
         }
       }
     }
@@ -1222,14 +1290,16 @@ function drawBottle(
     ctx.clip();
     ctx.fillStyle = rgba(mix(r.color, [40, 50, 58], 0.25), 0.95);
     ctx.fillRect(x0, y0 + h * 0.36, w, h);
-    const sp = Object.keys(r.contents)[0];
-    for (let k = 0; k < 9; k++) {
+    const kind = r.piece ?? 'granalla';
+    const count = kind === 'cristal' ? 16 : 9;
+    for (let k = 0; k < count; k++) {
       drawPiece(
         ctx,
-        sp,
+        kind,
+        r.color,
         x0 + w * (0.14 + 0.72 * hash(k * 3.3)),
         y0 + h * (0.34 + 0.14 * hash(k * 7.7 + 1)),
-        w * 0.085,
+        w * (kind === 'cristal' ? 0.06 : 0.085),
         hash(k) * 3,
       );
     }
@@ -1252,23 +1322,34 @@ function drawBottle(
   ctx.restore();
 }
 
-/** Un trozo de metal: granalla, cinta o viruta. */
+/** Un trozo de sólido: granalla, cinta, viruta, cristal o grano de polvo. */
 function drawPiece(
   ctx: CanvasRenderingContext2D,
-  sp: string,
+  piece: PieceKind,
+  col: RGB,
   x: number,
   y: number,
   size: number,
   rot: number,
 ): void {
-  const def = CHUNKS.find((c) => c.id === sp);
-  if (!def) return;
-  const col = def.solid!.color;
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rot);
   const dark = rgba(mix(col, [0, 0, 0], 0.45));
-  if (def.solid!.piece === 'cinta') {
+  if (piece === 'cristal') {
+    ctx.fillStyle = rgba(col);
+    ctx.strokeStyle = 'rgba(120,140,160,0.9)';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.rect(-size * 0.7, -size * 0.7, size * 1.4, size * 1.4);
+    ctx.fill();
+    ctx.stroke();
+  } else if (piece === 'polvo') {
+    ctx.fillStyle = rgba(col);
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (piece === 'cinta') {
     ctx.fillStyle = rgba(col);
     ctx.strokeStyle = dark;
     ctx.lineWidth = 0.8;
@@ -1277,7 +1358,7 @@ function drawPiece(
     ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.fillRect(-size * 1.3, -size * 0.24, size * 2.2, size * 0.16);
-  } else if (def.solid!.piece === 'viruta') {
+  } else if (piece === 'viruta') {
     ctx.lineCap = 'round';
     ctx.strokeStyle = dark;
     ctx.lineWidth = size * 0.52;

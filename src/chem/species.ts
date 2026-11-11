@@ -17,8 +17,13 @@ export interface SolidLook {
   kind: 'powder' | 'chunk';
   /** Volumen aparente del sedimento (mL por gramo), exagerado para que se vea */
   bulk: number;
-  piece?: 'granalla' | 'cinta' | 'viruta';
+  piece?: PieceKind;
+  /** Depósito pesado (metal): casi no se levanta al verter y decanta enseguida */
+  dense?: boolean;
 }
+
+/** Forma con la que se dibuja un trozo de sólido */
+export type PieceKind = 'granalla' | 'cinta' | 'viruta' | 'cristal' | 'polvo';
 
 export interface SpeciesDef {
   id: string;
@@ -93,6 +98,8 @@ const list: SpeciesDef[] = [
   { id: 'Pb', formula: 'Pb²⁺', name: 'ion plomo(II)', phase: 'aq' },
   { id: 'Zn2', formula: 'Zn²⁺', name: 'ion zinc', phase: 'aq' },
   { id: 'Mg2', formula: 'Mg²⁺', name: 'ion magnesio', phase: 'aq' },
+  { id: 'NH4', formula: 'NH₄⁺', name: 'ion amonio', phase: 'aq' },
+  { id: 'Ca', formula: 'Ca²⁺', name: 'ion calcio', phase: 'aq' },
   {
     id: 'Cu',
     formula: 'Cu²⁺',
@@ -182,6 +189,53 @@ const list: SpeciesDef[] = [
     phase: 's',
     M: 63.546,
     solid: { color: [190, 104, 58], kind: 'chunk', bulk: 0, piece: 'viruta' },
+  },
+
+  // Metales que se depositan al desplazarlos de la solución
+  {
+    id: 'AgM',
+    formula: 'Ag',
+    name: 'plata',
+    phase: 's',
+    M: 107.87,
+    solid: { color: [204, 208, 214], kind: 'powder', bulk: 4, dense: true },
+    obs: 'Cristales plateados sobre el cobre: plata metálica (Ag)',
+  },
+  {
+    id: 'CuS',
+    formula: 'Cu',
+    name: 'cobre',
+    phase: 's',
+    M: 63.546,
+    solid: { color: [176, 92, 52], kind: 'powder', bulk: 6, dense: true },
+    obs: 'Depósito rojizo: cobre metálico (Cu)',
+  },
+
+  // Sales solubles en cristales
+  {
+    id: 'NH4NO3_s',
+    formula: 'NH₄NO₃',
+    name: 'nitrato de amonio',
+    phase: 's',
+    M: 80.04,
+    solid: { color: [244, 246, 250], kind: 'powder', bulk: 1.3 },
+  },
+  {
+    id: 'CaCl2_s',
+    formula: 'CaCl₂',
+    name: 'cloruro de calcio',
+    phase: 's',
+    M: 110.98,
+    solid: { color: [236, 238, 240], kind: 'powder', bulk: 1.3 },
+  },
+  {
+    id: 'NaCl_s',
+    formula: 'NaCl',
+    name: 'cloruro de sodio',
+    phase: 's',
+    M: 58.44,
+    solid: { color: [250, 250, 252], kind: 'powder', bulk: 1.6 },
+    obs: 'Cristales blancos: cloruro de sodio (NaCl)',
   },
 
   // Gases

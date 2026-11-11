@@ -4,7 +4,8 @@
  *
  *  1. Neutralización instantánea H⁺ + OH⁻ → H₂O (exotérmica).
  *  2. Equilibrios de precipitación por Kps (se forma o se redisuelve sólido).
- *  3. Reacciones cinéticas (metal + ácido, descomposición térmica…).
+ *  3. Reacciones cinéticas (metal + ácido, desplazamiento entre metales,
+ *     descomposición térmica…).
  *  4. Balance térmico: mechero, enfriamiento hacia el ambiente, ebullición.
  *
  * Los datos (Kps, ΔH, masas molares) son reales; lo único "de juego" es la
@@ -143,7 +144,11 @@ function addHeat(v: Vessel, joules: number): void {
 export function addReagent(v: Vessel, r: ReagentDef, amount: number, events?: LabEvent[]): number {
   if (amount <= 0) return 0;
   if (r.kind === 'solid') {
-    for (const [sp, perDose] of Object.entries(r.contents)) v.n[sp] = mol(v, sp) + perDose * amount;
+    for (const [sp, perDose] of Object.entries(r.contents)) {
+      v.n[sp] = mol(v, sp) + perDose * amount;
+      // Lo que agrega el jugador no es una "observación" nueva
+      v.seen.add(sp);
+    }
     return amount;
   }
   const room = Math.max(0, v.capacity - v.vol);
@@ -158,7 +163,7 @@ export function addReagent(v: Vessel, r: ReagentDef, amount: number, events?: La
       const total = mol(v, s.id);
       if (total > 0) {
         const cur = v.susp[s.id] ?? 0;
-        v.susp[s.id] = cur + (total - cur) * stir;
+        v.susp[s.id] = cur + (total - cur) * stir * (s.solid!.dense ? 0.15 : 1);
       }
     }
     v.vol += dv;
@@ -188,22 +193,32 @@ interface Salt {
   an: string;
   b: number;
   ksp: number;
+  /** Calor absorbido al disolverse, J/mol (positivo = enfría la solución) */
+  dissolveH?: number;
+  /** Si está, la sal se disuelve o cristaliza de a poco, con este tiempo característico (s) */
+  tau?: number;
 }
 
-/** Sales poco solubles: MₐXᵦ(s) ⇌ a M + b X, con su producto de solubilidad a 25 °C */
+/**
+ * Sales: MₐXᵦ(s) ⇌ a M + b X, con su producto de solubilidad a 25 °C. Para las
+ * muy solubles el "Kps" sale de la solubilidad (tratándolas como ideales).
+ */
 const SALTS: Salt[] = [
   { solid: 'AgI', cat: 'Ag', a: 1, an: 'I', b: 1, ksp: 8.5e-17 },
   { solid: 'AgCl', cat: 'Ag', a: 1, an: 'Cl', b: 1, ksp: 1.8e-10 },
   { solid: 'PbI2', cat: 'Pb', a: 1, an: 'I', b: 2, ksp: 9.8e-9 },
   { solid: 'PbCl2', cat: 'Pb', a: 1, an: 'Cl', b: 2, ksp: 1.7e-5 },
   { solid: 'CuOH2', cat: 'Cu', a: 1, an: 'OH', b: 2, ksp: 2.2e-20 },
+  { solid: 'NH4NO3_s', cat: 'NH4', a: 1, an: 'NO3', b: 1, ksp: 560, dissolveH: 25.7e3, tau: 0.7 },
+  { solid: 'CaCl2_s', cat: 'Ca', a: 1, an: 'Cl', b: 2, ksp: 1200, dissolveH: -82.8e3, tau: 0.7 },
+  { solid: 'NaCl_s', cat: 'Na', a: 1, an: 'Cl', b: 1, ksp: 37.6, dissolveH: 3.9e3, tau: 0.7 },
 ];
 
 /**
  * Lleva una sal a su equilibrio de solubilidad: precipita si Q > Kps o
  * redisuelve sólido si Q < Kps. Se resuelve el avance ξ por bisección.
  */
-function equilibrate(v: Vessel, s: Salt): void {
+function equilibrate(v: Vessel, s: Salt, dt: number): void {
   const nS = mol(v, s.solid);
   const nM = mol(v, s.cat);
   const nX = mol(v, s.an);
@@ -235,7 +250,14 @@ function equilibrate(v: Vessel, s: Salt): void {
     }
     xi = (lo + hi) / 2;
   }
+  if (s.tau) {
+    // Avanza de a poco, con un mínimo para que el final no se arrastre
+    const pending = Math.abs(xi);
+    const stepMax = Math.max(pending, 0.01) * (1 - Math.exp(-dt / s.tau));
+    xi = Math.sign(xi) * Math.min(pending, stepMax);
+  }
   if (Math.abs(xi) < 1e-13) return;
+  if (s.dissolveH) addHeat(v, s.dissolveH * xi);
 
   v.n[s.cat] = Math.max(0, nM - s.a * xi);
   const left = nX - s.b * xi;
@@ -266,30 +288,98 @@ interface AcidAttack {
   /** ΔH en J por mol de sólido */
   dH: number;
   k: number;
+  /**
+   * Producto de solubilidad del sólido, [catión][OH⁻]². Si la solución ya lo
+   * alcanza, el ácido que queda es demasiado débil para seguir disolviéndolo.
+   */
+  ksp?: number;
 }
 
 /** Sólido + 2 H⁺ → catión²⁺ (+ H₂). Velocidad ∝ superficie · [H⁺]. */
 const ACID_ATTACKS: AcidAttack[] = [
   { solid: 'Zn', ion: 'Zn2', gas: 'H2', dH: -153.9e3, k: 0.08 },
   { solid: 'Mg', ion: 'Mg2', gas: 'H2', dH: -466.9e3, k: 0.5 },
-  { solid: 'CuO', ion: 'Cu', dH: -64e3, k: 0.05 },
+  { solid: 'CuO', ion: 'Cu', dH: -64e3, k: 0.1, ksp: 5e-21 },
 ];
+
+interface Displacement {
+  metal: string;
+  /** Ion que se reduce y cuántos por átomo de metal */
+  ion: string;
+  nIon: number;
+  product: string;
+  nProd: number;
+  /** Catión que deja el metal al oxidarse */
+  cation: string;
+  /** ΔH en J por mol de metal */
+  dH: number;
+  k: number;
+}
+
+/** Un metal más reactivo desplaza de la solución al ion de uno menos reactivo. */
+const DISPLACEMENTS: Displacement[] = [
+  { metal: 'CuM', ion: 'Ag', nIon: 2, product: 'AgM', nProd: 2, cation: 'Cu', dH: -146.4e3, k: 0.25 },
+  { metal: 'CuS', ion: 'Ag', nIon: 2, product: 'AgM', nProd: 2, cation: 'Cu', dH: -146.4e3, k: 0.25 },
+  { metal: 'Zn', ion: 'Ag', nIon: 2, product: 'AgM', nProd: 2, cation: 'Zn2', dH: -365.1e3, k: 0.25 },
+  { metal: 'Zn', ion: 'Cu', nIon: 1, product: 'CuS', nProd: 1, cation: 'Zn2', dH: -218.7e3, k: 0.25 },
+  { metal: 'Mg', ion: 'Cu', nIon: 1, product: 'CuS', nProd: 1, cation: 'Mg2', dH: -531.7e3, k: 0.4 },
+];
+
+/**
+ * Avance (mol) en este paso de una reacción entre un sólido y una especie
+ * disuelta, ambas expresadas en equivalentes. Cuando están en proporción casi
+ * estequiométrica las dos se agotan juntas y la ley de velocidad se arrastra
+ * sin terminar nunca; en ese caso se le pone un piso y se cierra la cola.
+ */
+function extent(rate: number, solid: number, dissolved: number, dt: number): number {
+  const lim = Math.min(solid, dissolved);
+  if (lim <= 0) return 0;
+  const ratio = lim / Math.max(solid, dissolved);
+  let r = rate;
+  if (ratio > 0.2) {
+    if (lim < 5e-5) return lim;
+    r = Math.max(r, 0.6 * lim * ratio * ratio);
+  }
+  return Math.min(lim, r * dt);
+}
+
+const tidy = (x: number): number => (x < 1e-12 ? 0 : x);
 
 /** Devuelve los moles de gas desprendidos en este paso. */
 function kinetics(v: Vessel, dt: number): number {
   let gas = 0;
   const L = v.vol / 1000;
   if (L > 1e-9) {
+    for (const d of DISPLACEMENTS) {
+      const nM = mol(v, d.metal);
+      const nI = mol(v, d.ion);
+      if (nM <= 0 || nI <= 0) continue;
+      const rate = d.k * Math.pow(nM, 2 / 3) * (nI / L) * arrhenius(v.temp);
+      const xi = extent(rate, nM, nI / d.nIon, dt);
+      if (xi <= 0) continue;
+      v.n[d.metal] = tidy(nM - xi);
+      v.n[d.ion] = tidy(nI - d.nIon * xi);
+      v.n[d.cation] = mol(v, d.cation) + xi;
+      v.n[d.product] = mol(v, d.product) + d.nProd * xi;
+      // El metal crece pegado al otro: casi nada queda flotando
+      v.susp[d.product] = (v.susp[d.product] ?? 0) + 0.03 * d.nProd * xi;
+      addHeat(v, -d.dH * xi);
+    }
+
     for (const r of ACID_ATTACKS) {
       const nS = mol(v, r.solid);
       const nH = mol(v, 'H');
       if (nS <= 0 || nH <= 0) continue;
+      if (r.ksp) {
+        const oh = ohFromNet((mol(v, 'OH') - nH) / L);
+        if ((mol(v, r.ion) / L) * oh * oh >= r.ksp) continue;
+      }
       const rate = r.k * Math.pow(nS, 2 / 3) * (nH / L) * arrhenius(v.temp);
-      const xi = Math.min(rate * dt, nS, nH / 2);
+      const xi = extent(rate, nS, nH / 2, dt);
       if (xi <= 0) continue;
       const left = nS - xi;
       v.n[r.solid] = left < 1e-9 ? 0 : left;
-      v.n.H = nH - 2 * xi;
+      v.n.H = tidy(nH - 2 * xi);
       v.n[r.ion] = mol(v, r.ion) + xi;
       addHeat(v, -r.dH * xi);
       if (r.gas) {
@@ -355,19 +445,26 @@ function thermal(v: Vessel, dt: number, events?: LabEvent[]): void {
 export function step(v: Vessel, dt: number, events?: LabEvent[]): void {
   neutralize(v);
   // Varias pasadas: las sales compiten por los mismos iones (p. ej. AgCl → AgI)
-  for (let sweep = 0; sweep < 6; sweep++) for (const s of SALTS) equilibrate(v, s);
+  for (let sweep = 0; sweep < 6; sweep++) {
+    for (const s of SALTS) {
+      // Las sales que se disuelven de a poco avanzan una sola vez por paso
+      if (s.tau && sweep > 0) continue;
+      equilibrate(v, s, dt);
+    }
+  }
   const gas = kinetics(v, dt);
   thermal(v, dt, events);
 
   // Sedimentación (la ebullición mantiene todo revuelto)
   const settle = Math.exp(-dt / SETTLE_TAU);
+  const settleDense = Math.exp(-dt / (SETTLE_TAU * 0.3));
   for (const s of POWDERS) {
     const total = mol(v, s.id);
     if (total <= 0) {
       if (v.susp[s.id]) v.susp[s.id] = 0;
       continue;
     }
-    let su = (v.susp[s.id] ?? 0) * settle;
+    let su = (v.susp[s.id] ?? 0) * (s.solid!.dense ? settleDense : settle);
     if (v.boiling) su = Math.max(su, total * 0.7);
     v.susp[s.id] = Math.min(su, total);
     if (total > 1e-5 && !v.seen.has(s.id)) {
